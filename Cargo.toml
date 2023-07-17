@@ -1,0 +1,7 @@
+[workspace]
+
+members = [
+    "serenity-command",
+    "serenity-command-derive",
+    "serenity-command-handler"
+]
