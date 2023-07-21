@@ -6,12 +6,11 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context as _};
 use itertools::Itertools;
 use serenity::http::Http;
-use serenity::model::application::interaction::MessageInteraction;
-use serenity::model::id::InteractionId;
+use serenity::model::id::MessageId;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
 use serenity::model::prelude::{ChannelId, Message, Reaction, ReactionType, UserId};
 use serenity::{async_trait, prelude::Context};
-use serenity_command::{BotCommand, CommandBuilder, CommandResponse};
+use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::RwLock;
@@ -27,7 +26,21 @@ const GO: &str = "<a:CrabRave:988508208240922635>";
 
 const MAX_POLLS: usize = 20;
 
-type PendingPoll = (InteractionId, Option<String>, Option<String>, Vec<String>);
+pub struct PendingPoll {
+    count_emote: Option<String>,
+    go_emote: Option<String>,
+}
+
+enum PollEvent {
+    AddReady(UserId),
+    RemoveReady(UserId),
+    Start,
+}
+
+struct PollHandle {
+    sender: Sender<PollEvent>,
+    user_id: UserId,
+}
 
 pub type PendingPolls = VecDeque<PendingPoll>;
 
@@ -47,7 +60,6 @@ impl ReadyPoll {
         ctx: &Context,
         interaction: &ApplicationCommandInteraction,
     ) -> anyhow::Result<()> {
-        let pending_poll = (interaction.id, self.count_emote, self.go_emote, Vec::new());
         let module: &ModPoll = handler.module()?;
         let http = &ctx.http;
         // create initial response to the interaction
@@ -64,7 +76,7 @@ impl ReadyPoll {
         // retrieve handle to interaction response so we can edit it later
         let resp = interaction.get_interaction_response(http).await?;
         // create async channel in order to process reactions asynchronously
-        let (sender, receiver) = channel(16);
+        let (sender, receiver) = channel(32);
 
         {
             // add this poll to the list
@@ -73,7 +85,11 @@ impl ReadyPoll {
             while polls.len() >= MAX_POLLS {
                 polls.pop_back();
             }
-            polls.push_front((interaction.id, sender));
+            let handle = PollHandle {
+                sender,
+                user_id: interaction.user.id,
+            };
+            polls.push_front((resp.id, handle));
         }
 
         // add reacts to interaction response
@@ -89,6 +105,10 @@ impl ReadyPoll {
 
         // spawn task to handle reactions
         let http_arc = Arc::clone(&ctx.http);
+        let pending_poll = PendingPoll {
+            count_emote: self.count_emote,
+            go_emote: self.go_emote,
+        };
         tokio::spawn(poll_task(
             handler.module_arc().unwrap(),
             http_arc,
@@ -96,7 +116,6 @@ impl ReadyPoll {
             pending_poll,
             receiver,
         ));
-        // already created a response
         Ok(())
     }
 }
@@ -149,12 +168,6 @@ impl BotCommand for ReadyPoll {
     }
 }
 
-enum PollEvent {
-    AddReady(UserId),
-    RemoveReady(UserId),
-    Start,
-}
-
 // task responsible for handling reactions to a poll
 async fn poll_task(
     module: Arc<ModPoll>,
@@ -196,8 +209,8 @@ async fn poll_task(
                         Arc::clone(&module),
                         http.as_ref(),
                         msg.channel_id,
-                        poll.1.as_deref(),
-                        poll.2.as_deref(),
+                        poll.count_emote.as_deref(),
+                        poll.go_emote.as_deref(),
                     )
                     .await;
                     if let Err(e) = res {
@@ -263,7 +276,7 @@ pub async fn crabdown(
     Ok(())
 }
 
-type PollSenders = VecDeque<(InteractionId, Sender<PollEvent>)>;
+type PollSenders = VecDeque<(MessageId, PollHandle)>;
 
 pub struct ModPoll {
     pub yes: String,
@@ -301,33 +314,12 @@ impl ModPoll {
         }
     }
 
-    // returns None if msg is not a /ready_poll interaction response
-    fn get_poll_interaction<'a>(
-        handler: &Handler,
-        msg: &'a Message,
-    ) -> Option<&'a MessageInteraction> {
-        // check if we sent this message
-        if Some(&msg.author.id) != handler.self_id.get() {
-            // not ours
-            return None;
-        }
-        // check if this message is a response to a /ready_poll command
-        msg.interaction
-            .as_ref()
-            .filter(|interaction| interaction.name == ReadyPoll::NAME)
-    }
-
     // callback for react removal
     pub async fn handle_remove_react(
         handler: &Handler,
-        ctx: &Context,
+        _ctx: &Context,
         react: &Reaction,
     ) -> anyhow::Result<()> {
-        let msg = react.message(&ctx.http).await?;
-        let Some(interaction) = Self::get_poll_interaction(handler, &msg) else {
-            return Ok(());
-        };
-
         // we only care about YES reacts being removed
         let module: &ModPoll = handler.module()?;
         if react.emoji.to_string() != module.yes {
@@ -341,8 +333,8 @@ impl ModPoll {
 
         // find the sender for that poll's handler and send a RemoveReady event
         let polls = module.ready_polls.read().await;
-        if let Some((_, sender)) = polls.iter().find(|(id, _)| *id == interaction.id) {
-            _ = sender.send(PollEvent::RemoveReady(user_id)).await;
+        if let Some((_, handle)) = polls.iter().find(|(id, _)| *id == react.message_id) {
+            _ = handle.sender.send(PollEvent::RemoveReady(user_id)).await;
         }
         Ok(())
     }
@@ -350,27 +342,25 @@ impl ModPoll {
     // callback for adding a react
     pub async fn handle_ready_poll(
         handler: &Handler,
-        ctx: &Context,
+        _ctx: &Context,
         react: &Reaction,
     ) -> anyhow::Result<()> {
-        let http = &ctx.http;
-        let msg = react.message(http).await?;
-        let Some(interaction) = Self::get_poll_interaction(handler, &msg) else {
-            return Ok(());
-        };
-
         // get the ID of the user who added the react
         let user_id = react
             .user_id
             .ok_or_else(|| anyhow!("invalid react: missing userId"))?;
 
         let module: &ModPoll = handler.module()?;
+        let polls = module.ready_polls.read().await;
+        let Some((_, handle)) = polls.iter().find(|(id, _)| *id == react.message_id) else {
+            return Ok(());
+        };
         let event =
             if react.emoji.to_string() == module.yes && Some(&user_id) != handler.self_id.get() {
                 // user added a YES react (and is not the bot)
                 // send AddReady event
                 PollEvent::AddReady(user_id)
-            } else if interaction.user.id == user_id && react.emoji.to_string() == module.start {
+            } else if handle.user_id == user_id && react.emoji.to_string() == module.start {
                 // poll author clicked the START react
                 // send Start event
                 PollEvent::Start
@@ -380,10 +370,7 @@ impl ModPoll {
             };
 
         // send event to the poll's handler task
-        let polls = module.ready_polls.read().await;
-        if let Some((_, sender)) = polls.iter().find(|(id, _)| *id == interaction.id) {
-            let _ = sender.send(event).await;
-        }
+        _ = handle.sender.send(event).await;
 
         Ok(())
     }
