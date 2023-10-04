@@ -27,6 +27,7 @@ const GO: &str = "<a:CrabRave:988508208240922635>";
 const MAX_POLLS: usize = 20;
 
 pub struct PendingPoll {
+    msg: Message,
     count_emote: Option<String>,
     go_emote: Option<String>,
 }
@@ -106,13 +107,13 @@ impl ReadyPoll {
         // spawn task to handle reactions
         let http_arc = Arc::clone(&ctx.http);
         let pending_poll = PendingPoll {
+            msg: resp,
             count_emote: self.count_emote,
             go_emote: self.go_emote,
         };
         tokio::spawn(poll_task(
             handler.module_arc().unwrap(),
             http_arc,
-            resp,
             pending_poll,
             receiver,
         ));
@@ -172,7 +173,6 @@ impl BotCommand for ReadyPoll {
 async fn poll_task(
     module: Arc<ModPoll>,
     http: Arc<Http>,
-    msg: Message,
     poll: PendingPoll,
     mut r: Receiver<PollEvent>,
 ) {
@@ -183,32 +183,27 @@ async fn poll_task(
     let mut last_event = Instant::now();
 
     loop {
+        if last_event.elapsed() >= Duration::from_secs(900) {
+            // too long since last event, stop this task
+            return;
+        }
+
         // poll for new events
-        while let Ok(evt) = timeout(Duration::from_millis(500), r.recv()).await {
+        while let Ok(evt) = timeout(Duration::from_millis(250), r.recv()).await {
             let Some(evt) = evt else {
                 // channel closed
                 return;
             };
             last_event = Instant::now();
-            changed = true;
             match evt {
-                PollEvent::AddReady(user) => {
-                    if !users.contains(&user) {
-                        users.push(user)
-                    }
-                }
-                PollEvent::RemoveReady(user) => {
-                    users.retain(|&u| u != user);
-                }
-                PollEvent::Start => {
-                    if started {
-                        continue;
-                    }
+                PollEvent::AddReady(user) if !users.contains(&user) => users.push(user),
+                PollEvent::RemoveReady(user) => users.retain(|&u| u != user),
+                PollEvent::Start if !started => {
                     started = true;
                     let res = crabdown(
                         Arc::clone(&module),
                         http.as_ref(),
-                        msg.channel_id,
+                        poll.msg.channel_id,
                         poll.count_emote.as_deref(),
                         poll.go_emote.as_deref(),
                     )
@@ -216,12 +211,11 @@ async fn poll_task(
                     if let Err(e) = res {
                         eprintln!("error executing crabdown: {e}");
                     }
+                    continue;
                 }
+                _ => continue,
             }
-        }
-        if last_event.elapsed() >= Duration::from_secs(900) {
-            // too long since last event, stop this task
-            return;
+            changed = true;
         }
         if !changed {
             // no change, no need to edit the message
@@ -231,7 +225,7 @@ async fn poll_task(
         // edit message in a separate task to avoid blocking this one
         tokio::spawn({
             let http = Arc::clone(&http);
-            let mut msg = msg.clone();
+            let mut msg = poll.msg.clone();
             async move {
                 let res = msg
                     .edit(http.as_ref(), |msg| {

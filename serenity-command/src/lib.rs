@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serenity::async_trait;
 use serenity::builder::{CreateApplicationCommand, CreateApplicationCommandOption, CreateEmbed};
 use serenity::model::application::interaction::application_command::{
@@ -18,6 +20,23 @@ pub enum CommandResponse {
 }
 
 pub type CommandKey<'a> = (&'a str, CommandType);
+
+pub struct CommandStore<'a, T>(
+    pub HashMap<CommandKey<'a>, Box<dyn CommandRunner<T> + Send + Sync>>,
+);
+
+impl<'a, T> Default for CommandStore<'a, T> {
+    fn default() -> Self {
+        CommandStore(HashMap::default())
+    }
+}
+
+impl<'a, T> CommandStore<'a, T> {
+    pub fn register<B: CommandBuilder<'static, Data = T>>(&mut self) {
+        let runner = B::runner();
+        self.0.insert(runner.name(), runner);
+    }
+}
 
 #[async_trait]
 pub trait BotCommand {

@@ -9,8 +9,8 @@ pub use bandcamp::Bandcamp;
 pub mod lastfm;
 pub use lastfm::Lastfm;
 
-pub mod ready_poll;
-pub use ready_poll::ModPoll;
+pub mod polls;
+pub use polls::ModPoll;
 
 pub mod autoreact;
 pub use autoreact::ModAutoreacts;
