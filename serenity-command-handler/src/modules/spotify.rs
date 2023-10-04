@@ -1,14 +1,22 @@
-use std::{borrow::Cow, collections::HashSet};
+use std::{borrow::Cow, collections::HashSet, sync::atomic::AtomicU64};
 
-use crate::{Module, ModuleMap};
-use anyhow::{anyhow, bail, Context};
+use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap};
+use anyhow::{anyhow, bail, Context as _};
+use regex::Regex;
 use reqwest::redirect::Policy;
 use rspotify::{
     clients::{BaseClient, OAuthClient},
     model::{AlbumId, FullTrack, Id, PlaylistId, SearchType, SimplifiedArtist, TrackId},
     AuthCodeSpotify, ClientCredsSpotify, Config, Credentials,
 };
-use serenity::async_trait;
+use serenity::{
+    async_trait,
+    model::prelude::interaction::application_command::ApplicationCommandInteraction,
+    model::{channel::Message, prelude::Reaction},
+};
+use serenity::{http::Http, model::prelude::ReactionType, prelude::*};
+use serenity_command::{BotCommand, CommandResponse};
+use serenity_command_derive::Command;
 
 use crate::album::{Album, AlbumProvider};
 
@@ -19,12 +27,30 @@ const SHORTENED_URL_START: &str = "https://spotify.link/";
 
 const CACHE_PATH: &str = "rspotify_cache";
 
+const UNLINK_REACT: &str = "🔗";
+
 pub struct Spotify<C: BaseClient> {
     // client: ClientCredsSpotify,
     pub client: C,
 }
 
 pub type SpotifyOAuth = Spotify<AuthCodeSpotify>;
+
+async fn resolve_redirect(url: &str) -> anyhow::Result<String> {
+    let client = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .build()
+        .unwrap();
+    let resp = client
+        .head(url)
+        .send()
+        .await
+        .context("Failed to resolve shortened spotify URL")?;
+    resp.headers()
+        .get("location")
+        .and_then(|val| val.to_str().map(String::from).ok())
+        .ok_or_else(|| anyhow!("Not a valid spotify URL"))
+}
 
 impl<C: BaseClient> Spotify<C> {
     async fn get_album_from_id(&self, id: &str) -> anyhow::Result<Album> {
@@ -68,6 +94,11 @@ impl<C: BaseClient> Spotify<C> {
     }
 
     pub async fn get_song_from_url(&self, url: &str) -> anyhow::Result<FullTrack> {
+        let mut url = Cow::Borrowed(url);
+        if url.starts_with(SHORTENED_URL_START) {
+            let location = resolve_redirect(url.as_ref()).await?;
+            url = Cow::Owned(location);
+        }
         if let Some(id) = url.strip_prefix(TRACK_URL_START) {
             self.get_song_from_id(id.split('?').next().unwrap()).await
         } else {
@@ -100,20 +131,7 @@ impl<C: BaseClient> AlbumProvider for Spotify<C> {
     async fn get_from_url(&self, url: &str) -> anyhow::Result<Album> {
         let mut url = Cow::Borrowed(url);
         if url.starts_with(SHORTENED_URL_START) {
-            let client = reqwest::Client::builder()
-                .redirect(Policy::none())
-                .build()
-                .unwrap();
-            let resp = client
-                .head(url.as_ref())
-                .send()
-                .await
-                .context("Failed to resolve shortened spotify URL")?;
-            let location = resp
-                .headers()
-                .get("location")
-                .and_then(|val| val.to_str().map(String::from).ok())
-                .ok_or_else(|| anyhow!("Not a valid spotify URL"))?;
+            let location = resolve_redirect(url.as_ref()).await?;
             url = Cow::Owned(location);
         }
         if let Some(id) = url.strip_prefix(ALBUM_URL_START) {
@@ -278,10 +296,111 @@ impl Spotify<AuthCodeSpotify> {
     }
 }
 
+#[derive(Command)]
+#[cmd(name = "unlink", message, desc = "Resolve a spotify.link URL")]
+pub struct Unlink(Message);
+
 #[async_trait]
 impl Module for Spotify<ClientCredsSpotify> {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
         Spotify::new().await
+    }
+
+    fn register_commands(&self, store: &mut CommandStore, _: &mut CompletionStore) {
+        store.register::<Unlink>();
+    }
+}
+
+pub async fn resolve_spotify_links(message: &str) -> anyhow::Result<Vec<String>> {
+    let re = Regex::new("https://spotify.link/[a-zA-Z0-9]+").unwrap();
+    let client = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .build()
+        .unwrap();
+    let mut urls = Vec::new();
+    for cap in re.captures_iter(message) {
+        let url = cap.get(0).unwrap().as_str();
+        let resp = client
+            .head(url)
+            .send()
+            .await
+            .context("Failed to resolve shortened spotify URL")?;
+        let location = resp
+            .headers()
+            .get("location")
+            .and_then(|val| val.to_str().ok())
+            .ok_or_else(|| anyhow!("Not a valid spotify URL"))?;
+        urls.push(location.split('?').next().unwrap().to_string());
+    }
+    Ok(urls)
+}
+
+static UNLINK_CACHE: AtomicU64 = AtomicU64::new(0);
+
+pub async fn handle_message(http: &Http, message: &Message) -> anyhow::Result<()> {
+    if !message.content.contains(SHORTENED_URL_START) {
+        return Ok(());
+    }
+    let offset = message.id.0 % 64;
+    let mask = !(1 << offset);
+    UNLINK_CACHE.fetch_and(mask, std::sync::atomic::Ordering::AcqRel);
+    message
+        .react(http, ReactionType::Unicode(UNLINK_REACT.to_string()))
+        .await?;
+    Ok(())
+}
+
+pub async fn handle_reaction(
+    handler: &Handler,
+    http: &Http,
+    react: &Reaction,
+) -> anyhow::Result<()> {
+    if !react.emoji.unicode_eq(UNLINK_REACT) || handler.self_id.get().copied() == react.user_id {
+        return Ok(());
+    }
+    let offset = react.message_id.0 % 64;
+    let mask = 1 << offset;
+    let previous = UNLINK_CACHE.fetch_or(mask, std::sync::atomic::Ordering::AcqRel);
+    if previous & mask != 0 {
+        // already unlinked
+        return Ok(());
+    }
+    let message = react.message(http).await?;
+    let urls = resolve_spotify_links(&message.content).await?;
+    if urls.is_empty() {
+        return Ok(());
+    }
+    let plural_s = if urls.len() > 1 { "s" } else { "" };
+    let mut resp = format!("Resolved spotify link{plural_s}");
+    urls.into_iter().for_each(|url| {
+        resp.push('\n');
+        resp.push_str(&url);
+    });
+    _ = message.reply(http, resp).await;
+    Ok(())
+}
+
+#[async_trait]
+impl BotCommand for Unlink {
+    type Data = Handler;
+
+    async fn run(
+        self,
+        _: &Handler,
+        _: &Context,
+        _: &ApplicationCommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let urls = resolve_spotify_links(&self.0.content).await?;
+        if urls.is_empty() {
+            bail!("No shortened spotify links found in message");
+        }
+        let plural_s = (urls.len() > 1).then_some("s").unwrap_or_default();
+        let mut resp = format!("Resolved spotify link{plural_s} from {}", self.0.link());
+        urls.into_iter().for_each(|url| {
+            resp.push('\n');
+            resp.push_str(&url)
+        });
+        Ok(CommandResponse::Public(resp))
     }
 }
 
