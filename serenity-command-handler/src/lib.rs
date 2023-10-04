@@ -19,7 +19,7 @@ use serenity::{
 };
 use tokio::sync::OnceCell;
 
-use serenity_command::{CommandBuilder, CommandKey, CommandResponse, CommandRunner};
+use serenity_command::{CommandKey, CommandResponse};
 
 pub mod album;
 pub mod command_context;
@@ -30,17 +30,7 @@ use db::Db;
 
 use command_context::Responder;
 
-#[derive(Default)]
-pub struct CommandStore(
-    pub HashMap<CommandKey<'static>, Box<dyn CommandRunner<Handler> + Send + Sync>>,
-);
-
-impl CommandStore {
-    pub fn register<B: CommandBuilder<'static, Data = Handler>>(&mut self) {
-        let runner = B::runner();
-        self.0.insert(runner.name(), runner);
-    }
-}
+pub type CommandStore = serenity_command::CommandStore<'static, Handler>;
 
 type SpecialCommand = for<'a> fn(
     &'a Handler,
@@ -145,10 +135,6 @@ impl Handler {
     pub fn module_arc<M: Module>(&self) -> anyhow::Result<Arc<M>> {
         self.modules.module_arc()
     }
-
-    // pub fn http(&self) -> &Http {
-    //     self.http.get().unwrap().as_ref()
-    // }
 
     async fn process_command(
         &self,
