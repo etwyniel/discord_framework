@@ -205,7 +205,10 @@ impl Handler {
             let start = Instant::now();
             let resp = self.process_command(&ctx, &command).await;
             let elapsed = start.elapsed();
-            eprintln!("{guild_name}{user}: /{name} -({:?})-> {:?}", elapsed, &resp);
+            eprintln!(
+                "{guild_name}{user}: /{name} -({:.1?})-> {:?}",
+                elapsed, &resp
+            );
             let resp = match resp {
                 Ok(resp) => resp,
                 Err(e) => CommandResponse::Private(e.to_string()),

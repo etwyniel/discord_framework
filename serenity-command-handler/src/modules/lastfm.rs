@@ -26,6 +26,7 @@ use std::env;
 use std::fmt::Write;
 use std::io::Cursor;
 use std::iter::IntoIterator;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -237,6 +238,7 @@ pub struct GetAotys {
     #[cmd(desc = "Last.fm username")]
     pub username: String,
     pub year: Option<i64>,
+    pub year_range: Option<String>,
     #[cmd(desc = "Skip albums without album art")]
     pub skip: Option<bool>,
 }
@@ -274,19 +276,39 @@ impl GetAotys {
         let lastfm: Arc<Lastfm> = handler.module_arc()?;
         let spotify: Arc<Spotify> = handler.module_arc()?;
         let db = Arc::clone(&handler.db);
-        let year = self
-            .year
-            .map(|yr| yr as u64)
-            .unwrap_or_else(|| Utc::now().year() as u64);
+        let year_range = self
+            .year_range
+            .as_deref()
+            .and_then(|range| range.split_once('-'))
+            .and_then(|(start, end)| {
+                start
+                    .parse::<u64>()
+                    .and_then(|start| end.parse::<u64>().map(|end| start..=end))
+                    .ok()
+            })
+            .unwrap_or_else(|| {
+                let y = self
+                    .year
+                    .map(|yr| yr as u64)
+                    .unwrap_or_else(|| Utc::now().year() as u64);
+                y..=y
+            });
+        let start = year_range.start();
+        let end = year_range.end();
+        let year_fmt = if end - start <= 1 {
+            start.to_string()
+        } else {
+            format!("{start}-{end}")
+        };
         let mut aotys = lastfm
-            .get_albums_of_the_year(db, spotify, &self.username, year)
+            .get_albums_of_the_year(db, spotify, &self.username, &year_range)
             .await?;
         let http = &ctx.http;
         if aotys.is_empty() {
             opts.create_followup_message(http, |msg| {
                 msg.content(format!(
                     "No {} albums found for user {}",
-                    year, &self.username
+                    &year_fmt, &self.username
                 ))
             })
             .await?;
@@ -294,7 +316,7 @@ impl GetAotys {
         }
         aotys.truncate(25);
         let image = create_aoty_chart(&aotys, self.skip.unwrap_or(false)).await?;
-        let mut content = format!("**Top albums of {} for {}**", year, &self.username);
+        let mut content = format!("**Top albums of {} for {}**", &year_fmt, &self.username);
         aotys
             .iter()
             .map(|ab| {
@@ -310,7 +332,7 @@ impl GetAotys {
         opts.create_followup_message(http, |msg| {
             msg.content(content).add_file(AttachmentType::Bytes {
                 data: Cow::Owned(image),
-                filename: format!("{}_aoty_{}.png", &self.username, year),
+                filename: format!("{}_aoty_{}.png", &self.username, &year_fmt),
             })
         })
         .await?;
@@ -569,7 +591,9 @@ impl Lastfm {
         user: String,
         page: Option<u64>,
     ) -> anyhow::Result<TopAlbums> {
-        let mut params: Vec<(&'static str, &str)> = vec![("user", &user), ("limit", "200")];
+        // using a limit of 500 because somewhere above that number lastfm stops including
+        // image links. this limit seems to vary somehow?
+        let mut params: Vec<(&'static str, &str)> = vec![("user", &user), ("limit", "500")];
 
         let page_s = page.map(|p| p.to_string());
         if let Some(page) = page_s.as_deref() {
@@ -622,18 +646,18 @@ impl Lastfm {
         db: Arc<Mutex<Db>>,
         spotify: Arc<Spotify>,
         user: &str,
-        year: u64,
+        year_range: &RangeInclusive<u64>,
     ) -> anyhow::Result<Vec<TopAlbum>> {
         let mut aotys = Vec::<TopAlbum>::new();
         Arc::clone(&self)
             .top_albums_stream(user.to_string())
             .try_take_while(|ta| {
-                let last_plays = ta
+                let first_plays = ta
                     .album
-                    .last()
+                    .first()
                     .map(|ab| ab.playcount.parse::<u64>().unwrap())
                     .unwrap_or_default();
-                async move { Ok(last_plays >= 4) }
+                async move { Ok(first_plays >= 4) }
             })
             .try_fold(&mut aotys, |aotys, top_albums| async {
                 let tuples = top_albums
@@ -653,7 +677,7 @@ impl Lastfm {
                         .enumerate()
                         .filter(|(_, (ab, yr))| {
                             ab.playcount.parse::<u64>().unwrap() >= 4
-                                && yr.map(|yr| yr == year).unwrap_or(true)
+                                && yr.map(|yr| year_range.contains(&yr)).unwrap_or(true)
                         })
                         .map(|(i, (ab, yr))| {
                             tokio::spawn({
@@ -665,7 +689,6 @@ impl Lastfm {
                                     ab.url,
                                 );
                                 async move {
-                                    // Backoff loop
                                     match yr {
                                         Ok(year) => return Ok((i, Some(year))),
                                         Err(last_checked)
@@ -678,9 +701,6 @@ impl Lastfm {
                                         }
                                         _ => {}
                                     }
-                                    // if let Some(year) = yr {
-                                    //     return Ok((i, Some(year)));
-                                    // }
                                     year_fut.await.map(|yr| (i, yr))
                                 }
                             })
@@ -692,7 +712,7 @@ impl Lastfm {
                     Err(e) => Err(anyhow::Error::from(e)),
                 })
                 .map(|res| match res {
-                    Ok((i, yr)) => Ok((i, yr == Some(year))),
+                    Ok((i, yr)) => Ok((i, yr.map(|yr| year_range.contains(&yr)).unwrap_or(false))),
                     Err(e) => Err(e),
                 })
                 .try_collect::<HashMap<usize, bool>>();
@@ -760,20 +780,24 @@ impl Lastfm {
                 let Some(yr) = (match cached_year {
                     Ok(year) => Some(year),
                     Err(last_checked) => {
-                        if (Utc::now() - Utc.timestamp(last_checked as i64, 0)).num_days() < TTL_DAYS {
+                        if (Utc::now() - Utc.timestamp(last_checked as i64, 0)).num_days()
+                            < TTL_DAYS
+                        {
                             None
                         } else {
-                        get_release_year(
-                            Arc::clone(&db),
-                            Arc::clone(&spotify),
-                            album.artist,
-                            album.title,
-                            album.url,
+                            get_release_year(
+                                Arc::clone(&db),
+                                Arc::clone(&spotify),
+                                album.artist,
+                                album.title,
+                                album.url,
                             )
                             .await?
                         }
                     }
-                }) else { continue };
+                }) else {
+                    continue;
+                };
                 if yr != year {
                     continue;
                 };
@@ -816,7 +840,6 @@ async fn get_release_year(
     album: String,
     url: String,
 ) -> anyhow::Result<Option<u64>> {
-    // Backoff loop
     let lastfm_release_year = retrieve_release_year(&url).await;
     match lastfm_release_year {
         Ok(Some(year)) => {
@@ -826,6 +849,7 @@ async fn get_release_year(
         Err(e) => eprintln!("Error getting release year from lastfm: {e}"),
         _ => (),
     }
+    // Backoff loop
     loop {
         match spotify.get_album(&artist, &album).await {
             Ok(Some(crate::album::Album {
@@ -844,10 +868,12 @@ async fn get_release_year(
             Err(e) => {
                 let retry = err_is_status_code(&e, 429);
                 if &e.to_string() == "Not found" {
+                    set_last_checked(&db, &artist, &album).await?;
                     break Ok(None);
                 }
                 if !retry {
                     eprintln!("query {} {} failed: {:?}", &artist, &album, &e);
+                    set_last_checked(&db, &artist, &album).await?;
                     break Err(e);
                 }
                 // Wait before retrying
@@ -879,8 +905,8 @@ pub async fn get_release_years<'a, I: IntoIterator<Item = (&'a str, &'a str, usi
         ")
         SELECT albums_in.pos, album_cache.year, album_cache.last_checked
         FROM album_cache JOIN albums_in
-        ON albums_in.artist = album_cache.artist
-        AND albums_in.album = album_cache.album",
+        ON albums_in.artist LIKE album_cache.artist
+        AND albums_in.album LIKE album_cache.album",
     );
     let db = db.lock().await;
     let mut stmt = db.conn.prepare(&query)?;
@@ -910,7 +936,7 @@ async fn set_release_year(
 
 async fn set_last_checked(db: &Mutex<Db>, artist: &str, album: &str) -> anyhow::Result<()> {
     let db = db.lock().await;
-    db.conn.execute("INSERT INTO album_cache (artist, album, last_checked) VALUES (?1, ?2, ?3) ON CONFLICT(artist, album) DO NOTHING",
+    db.conn.execute("INSERT INTO album_cache (artist, album, last_checked) VALUES (?1, ?2, ?3) ON CONFLICT(artist, album) DO UPDATE SET last_checked = ?3",
     params![artist, album, Utc::now().timestamp()])?;
     Ok(())
 }

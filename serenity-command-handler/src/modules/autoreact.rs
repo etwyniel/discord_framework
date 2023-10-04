@@ -299,6 +299,29 @@ pub async fn add_reacts(handler: &Handler, ctx: &Context, msg: Message) -> anyho
         .await
 }
 
+impl ModAutoreacts {
+    pub async fn load_reacts(&self, db: &mut Db) -> anyhow::Result<()> {
+        let cache = {
+            db.conn
+                .prepare("SELECT guild_id, trigger, emote FROM autoreact")?
+                .query([])?
+                .map(|row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .try_fold::<_, anyhow::Error, _>(
+                    HashMap::<u64, Vec<AutoReact>>::new(),
+                    |mut cache, (guild_id, trigger, emote): (u64, String, String)| {
+                        cache
+                            .entry(guild_id)
+                            .or_default()
+                            .push(AutoReact::new(&trigger, &emote)?);
+                        Ok(cache)
+                    },
+                )?
+        };
+        *self.cache.write().await = cache;
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl Module for ModAutoreacts {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
