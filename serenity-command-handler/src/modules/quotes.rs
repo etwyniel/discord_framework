@@ -211,29 +211,29 @@ pub async fn get_random_quote(
     fetch_quote(handler, guild_id, number).await
 }
 
-#[derive(Clone)]
-pub struct CaseInsensitiveString(String);
+// #[derive(Clone)]
+// pub struct CaseInsensitiveString(String);
 
-impl Hash for CaseInsensitiveString {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let lower = self.0.to_lowercase();
-        state.write(lower.as_bytes());
-    }
-}
+// impl Hash for CaseInsensitiveString {
+//     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+//         let lower = self.0.to_lowercase();
+//         state.write(lower.as_bytes());
+//     }
+// }
 
-impl PartialEq for CaseInsensitiveString {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_lowercase() == other.0.to_lowercase()
-    }
-}
+// impl PartialEq for CaseInsensitiveString {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.0.to_lowercase() == other.0.to_lowercase()
+//     }
+// }
 
-impl Eq for CaseInsensitiveString {}
+// impl Eq for CaseInsensitiveString {}
 
 pub async fn quotes_markov_chain(
     handler: &Handler,
     guild_id: u64,
     user: Option<u64>,
-) -> anyhow::Result<markov::Chain<CaseInsensitiveString>> {
+) -> anyhow::Result<markov::Chain<String>> {
     let db = handler.db.lock().await;
     let mut stmt = db.conn.prepare(
         "SELECT contents FROM quote WHERE guild_id = ?1 AND (?2 IS NULL or author_id = ?2)",
@@ -246,7 +246,7 @@ pub async fn quotes_markov_chain(
                 if i > 0 {
                     msg = msg.split_once('>').map(|(_, msg)| msg).unwrap_or(msg);
                 }
-                chain.feed([CaseInsensitiveString(msg.trim().to_string())]);
+                chain.feed_str(msg.trim());
             });
             Ok(())
         })?;
@@ -420,14 +420,11 @@ impl BotCommand for FakeQuote {
         )
         .await?;
         let mut resp = if let Some(start) = self.start {
-            chain.generate_from_token(CaseInsensitiveString(start))
-            // chain.generate_str_from_token(&start)
+            // chain.generate_from_token(start)
+            chain.generate_str_from_token(&start)
         } else {
-            chain.generate()
-        }
-        .into_iter()
-        .map(|CaseInsensitiveString(s)| s)
-        .join(" ");
+            chain.generate_str()
+        };
         if resp.is_empty() {
             resp = "Failed to generate quote".to_string();
         } else if let Some(UserId(id)) = self.user {
