@@ -1,4 +1,6 @@
-use anyhow::{anyhow, Context as _};
+use anyhow::{anyhow, bail, Context as _};
+use fallible_iterator::FallibleIterator;
+use itertools::Itertools;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
 use serenity::{
     async_trait,
@@ -115,6 +117,21 @@ impl BotCommand for SetPinboardWebhook {
     const PERMISSIONS: Permissions = Permissions::MANAGE_WEBHOOKS;
 }
 
+async fn load_allowed_channels(
+    handler: &Handler,
+    guild_id: GuildId,
+) -> anyhow::Result<Vec<ChannelId>> {
+    let db = handler.db.lock().await;
+    let mut stmt = db
+        .conn
+        .prepare("SELECT channel_id FROM pinboard_allowed_channels WHERE guild_id = ?1")?;
+    let channels: Vec<_> = stmt
+        .query([guild_id.0])?
+        .map(|row| Ok(ChannelId(row.get(0)?)))
+        .collect()?;
+    Ok(channels)
+}
+
 pub struct Pinboard;
 
 impl Pinboard {
@@ -131,6 +148,10 @@ impl Pinboard {
             .await
             .get_guild_field(guild_id.0, "pinboard_webhook")
             .map_err(|_| anyhow!("No webhook configured"))?;
+        let allowed_channels = load_allowed_channels(handler, guild_id).await?;
+        if !(allowed_channels.is_empty() || allowed_channels.contains(&channel)) {
+            return Ok(());
+        }
         let pins = channel
             .pins(&ctx.http)
             .await
@@ -173,8 +194,9 @@ impl Pinboard {
             .iter()
             .filter(|at| at.height.is_some())
             .map(|at| at.url.as_str());
+        let self_name = handler.self_id.get().unwrap().to_user(&ctx).await?.name;
         let mut embeds = Vec::with_capacity(last_pin.embeds.len() + 1);
-        let footer_str = format!("Message pinned from #{channel_name} using LPBot");
+        let footer_str = format!("Pinned from #{channel_name} using {self_name}");
         // retrieve actual message in order to get potential reply
         let msg = last_pin.channel_id.message(&ctx.http, last_pin.id).await?;
         if let Some(reply) = &msg.referenced_message {
@@ -271,6 +293,99 @@ impl Pinboard {
     }
 }
 
+#[derive(Command)]
+#[cmd(name = "register_channel_to_pinboard")]
+struct RegisterChannel;
+
+#[async_trait]
+impl BotCommand for RegisterChannel {
+    type Data = Handler;
+    const PERMISSIONS: Permissions = Permissions::MANAGE_MESSAGES;
+
+    async fn run(
+        self,
+        data: &Handler,
+        _: &Context,
+        interaction: &ApplicationCommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let Some(guild_id) = interaction.guild_id else {
+            bail!("Must be run in a guild")
+        };
+        let db = data.db.lock().await;
+        db.conn.execute(
+            "INSERT INTO pinboard_allowed_channels (guild_id, channel_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+            [guild_id.0, interaction.channel_id.0])?;
+        Ok(CommandResponse::Private(format!(
+            "Registered <#{}> to pinboard",
+            interaction.channel_id.0
+        )))
+    }
+}
+
+#[derive(Command)]
+#[cmd(name = "unregister_channel_from_pinboard")]
+struct UnregisterChannel;
+
+#[async_trait]
+impl BotCommand for UnregisterChannel {
+    type Data = Handler;
+    const PERMISSIONS: Permissions = Permissions::MANAGE_MESSAGES;
+
+    async fn run(
+        self,
+        data: &Handler,
+        _: &Context,
+        interaction: &ApplicationCommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let Some(guild_id) = interaction.guild_id else {
+            bail!("Must be run in a guild")
+        };
+        let db = data.db.lock().await;
+        db.conn.execute(
+            "DELETE FROM pinboard_allowed_channels WHERE guild_id = ?1 AND channel_id = ?2",
+            [guild_id.0, interaction.channel_id.0],
+        )?;
+        Ok(CommandResponse::Private(format!(
+            "Unregistered <#{}> from pinboard",
+            interaction.channel_id.0
+        )))
+    }
+}
+
+#[derive(Command)]
+#[cmd(name = "list_pinboard_channels")]
+struct ListChannels;
+
+#[async_trait]
+impl BotCommand for ListChannels {
+    type Data = Handler;
+    const PERMISSIONS: Permissions = Permissions::MANAGE_MESSAGES;
+
+    async fn run(
+        self,
+        handler: &Handler,
+        _: &Context,
+        interaction: &ApplicationCommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let Some(guild_id) = interaction.guild_id else {
+            bail!("Must be run in a guild")
+        };
+        let channels = load_allowed_channels(handler, guild_id).await?;
+        let resp = match channels.as_slice() {
+            [] => "No channels configured, pins from every channel will be sent to pinboard"
+                .to_string(),
+            _ => format!(
+                "Pins from the following channels will be sent to pinboard:\n{}",
+                channels
+                    .iter()
+                    .map(|ChannelId(c)| format!("<#{c}>"))
+                    .join("\n")
+            ),
+        };
+        Ok(CommandResponse::Public(resp))
+    }
+}
+
 #[async_trait]
 impl Module for Pinboard {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
@@ -279,6 +394,15 @@ impl Module for Pinboard {
 
     async fn setup(&mut self, db: &mut crate::db::Db) -> anyhow::Result<()> {
         db.add_guild_field("pinboard_webhook", "STRING")?;
+        db.conn.execute(
+            "CREATE TABLE IF NOT EXISTS pinboard_allowed_channels (
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+
+                UNIQUE (guild_id, channel_id)
+            )",
+            [],
+        )?;
         Ok(())
     }
 
@@ -288,5 +412,8 @@ impl Module for Pinboard {
         _completion_handlers: &mut CompletionStore,
     ) {
         store.register::<SetPinboardWebhook>();
+        store.register::<RegisterChannel>();
+        store.register::<UnregisterChannel>();
+        store.register::<ListChannels>();
     }
 }
