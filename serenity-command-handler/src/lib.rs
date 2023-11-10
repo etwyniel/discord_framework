@@ -70,7 +70,7 @@ pub struct ModuleMap(TypeMap);
 
 impl ModuleMap {
     pub fn module<M: Module>(&self) -> anyhow::Result<&M> {
-        let module = &self
+        let module = self
             .0
             .get::<KeyWrapper<M>>()
             .ok_or_else(|| anyhow!("No module of type {}", std::any::type_name::<M>()))?;

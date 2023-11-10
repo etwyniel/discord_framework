@@ -1,10 +1,10 @@
 use anyhow::{bail, Context as _};
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use fallible_iterator::FallibleIterator;
-use futures::{Future, Stream, StreamExt, TryStreamExt};
+use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt};
 use image::imageops::FilterType;
 use image::io::Reader;
-use image::{GenericImage, ImageOutputFormat, RgbaImage};
+use image::{DynamicImage, GenericImage, ImageOutputFormat, RgbaImage};
 use itertools::Itertools;
 use regex::Regex;
 use reqwest::{Client, Method, StatusCode, Url};
@@ -319,6 +319,7 @@ impl GetAotys {
         let mut content = format!("**Top albums of {} for {}**", &year_fmt, &self.username);
         aotys
             .iter()
+            .map(|ab| &ab.album)
             .map(|ab| {
                 format!(
                     "{} - {} ({} plays)",
@@ -340,57 +341,57 @@ impl GetAotys {
     }
 }
 
-pub async fn create_aoty_chart(albums: &[TopAlbum], skip: bool) -> anyhow::Result<Vec<u8>> {
-    let n = (albums.len() as f32).sqrt().ceil() as u32;
-    let len = n * CHART_SQUARE_SIZE;
-    let mut height = n;
-    while (height - 1) * n >= albums.len() as u32 {
-        height -= 1;
-    }
-    let mut out = RgbaImage::new(len, height * CHART_SQUARE_SIZE);
-    let mut futures = Vec::new();
-    let mut offset = 0;
-    for (mut i, album) in albums.iter().enumerate() {
-        let image_url = match album.image.iter().last() {
-            Some(img) => img.url.clone(),
-            None => {
-                offset += 1;
-                continue;
-            }
-        };
-        futures.push(tokio::spawn(async move {
+pub struct AlbumWithImage {
+    album: TopAlbum,
+    image: Option<DynamicImage>,
+}
+
+impl TopAlbum {
+    fn get_image(&self) -> impl 'static + Future<Output = anyhow::Result<Option<DynamicImage>>> {
+        let image = self.image.iter().last().map(|img| img.url.clone());
+
+        async move {
+            let Some(image_url) = image else {
+                return Ok(None);
+            };
             let reader = match reqwest::get(&image_url).await {
                 Ok(resp) => Reader::new(Cursor::new(
                     resp.bytes().await.context("Error getting album cover")?,
                 )),
-                Err(_) => return Ok((i, None)),
+                Err(_) => return Ok(None),
             };
             let img = reader.with_guessed_format()?.decode()?.resize(
                 CHART_SQUARE_SIZE,
                 CHART_SQUARE_SIZE,
                 FilterType::Triangle,
             );
-            if skip {
-                i -= offset;
-            }
-            Ok::<_, anyhow::Error>((i - offset, Some(img)))
-        }))
+            Ok(Some(img))
+        }
+        .boxed()
     }
-    offset = 0;
-    for fut in futures {
-        let (mut i, img) = match fut.await? {
-            Ok((i, Some(img))) => (i, img),
-            _ => {
-                offset += 1;
-                continue;
-            }
+}
+
+pub async fn create_aoty_chart(albums: &[AlbumWithImage], skip: bool) -> anyhow::Result<Vec<u8>> {
+    let n = (albums.len() as f32).sqrt().ceil() as u32;
+    eprintln!("Creating {n}x{n} chart");
+    let len = n * CHART_SQUARE_SIZE;
+    let mut height = n;
+    while (height - 1) * n >= albums.len() as u32 {
+        height -= 1;
+    }
+    let mut out = RgbaImage::new(len, height * CHART_SQUARE_SIZE);
+    let mut offset = 0;
+    for (mut i, ab) in albums.iter().enumerate() {
+        let Some(img) = ab.image.as_ref() else {
+            offset += 1;
+            continue;
         };
         if skip {
             i -= offset;
         }
         let y = (i as u32 / n) * CHART_SQUARE_SIZE;
         let x = (i as u32 % n) * CHART_SQUARE_SIZE;
-        out.copy_from(&img, x, y)?;
+        out.copy_from(img, x, y)?;
     }
     let buf = Vec::new();
     let mut writer = Cursor::new(buf);
@@ -590,6 +591,7 @@ impl Lastfm {
         self: Arc<Self>,
         user: String,
         page: Option<u64>,
+        current_year: bool,
     ) -> anyhow::Result<TopAlbums> {
         // using a limit of 500 because somewhere above that number lastfm stops including
         // image links. this limit seems to vary somehow?
@@ -598,6 +600,10 @@ impl Lastfm {
         let page_s = page.map(|p| p.to_string());
         if let Some(page) = page_s.as_deref() {
             params.push(("page", page));
+        }
+
+        if current_year {
+            params.push(("period", "12month"))
         }
 
         let top_albums: TopAlbumsResp = self.query("user.gettopalbums", params).await?;
@@ -619,21 +625,23 @@ impl Lastfm {
     pub fn top_albums_stream_inner(
         self: Arc<Self>,
         user: String,
+        current_year: bool,
     ) -> impl Stream<Item = impl Future<Output = anyhow::Result<TopAlbums>>> {
         tokio_stream::iter(1..).map(move |i| {
             let user = user.clone();
             let lfm = Arc::clone(&self);
             eprintln!("querying page {i}");
-            lfm.get_top_albums(user, Some(i))
+            lfm.get_top_albums(user, Some(i), current_year)
         })
     }
 
     pub fn top_albums_stream(
         self: Arc<Self>,
         user: String,
+        current_year: bool,
     ) -> impl Stream<Item = anyhow::Result<TopAlbums>> {
-        self.top_albums_stream_inner(user)
-            .buffered(4)
+        self.top_albums_stream_inner(user, current_year)
+            .buffered(2)
             .try_take_while(|ta| {
                 let total_pages = ta.attr.total_pages.parse::<u64>().unwrap();
                 let page = ta.attr.page.parse::<u64>().unwrap();
@@ -647,10 +655,12 @@ impl Lastfm {
         spotify: Arc<Spotify>,
         user: &str,
         year_range: &RangeInclusive<u64>,
-    ) -> anyhow::Result<Vec<TopAlbum>> {
+    ) -> anyhow::Result<Vec<AlbumWithImage>> {
         let mut aotys = Vec::<TopAlbum>::new();
-        Arc::clone(&self)
-            .top_albums_stream(user.to_string())
+        let mut img_futures = Vec::new();
+        let current_year = *year_range.start() == Utc::now().year() as u64;
+        let mut stream = Arc::clone(&self)
+            .top_albums_stream(user.to_string(), current_year)
             .try_take_while(|ta| {
                 let first_plays = ta
                     .album
@@ -659,76 +669,86 @@ impl Lastfm {
                     .unwrap_or_default();
                 async move { Ok(first_plays >= 4) }
             })
-            .try_fold(&mut aotys, |aotys, top_albums| async {
-                let tuples = top_albums
+            .boxed();
+        while let Some(res) = stream.next().await {
+            eprintln!("Retrieved page");
+            let top_albums = res?;
+            let tuples = top_albums
+                .album
+                .iter()
+                .enumerate()
+                .map(|(i, ab)| (ab.artist.name.as_str(), ab.name.as_str(), i));
+            let res = get_release_years(&db, tuples).await?;
+            eprintln!(
+                "Found {}/{} release years in db",
+                res.len(),
+                top_albums.album.len()
+            );
+            let mut years: Vec<Result<u64, u64>> = vec![Err(0); top_albums.album.len()];
+            res.into_iter().for_each(|(i, year)| years[i] = year);
+            let fetches = futures::stream::iter(
+                top_albums
                     .album
                     .iter()
+                    .cloned()
                     .enumerate()
-                    .map(|(i, ab)| (ab.artist.name.as_str(), ab.name.as_str(), i));
-                let res = get_release_years(&db, tuples).await?;
-                let mut years: Vec<Result<u64, u64>> = vec![Err(0); top_albums.album.len()];
-                res.into_iter().for_each(|(i, year)| years[i] = year);
-                let fetches = futures::stream::iter(
-                    top_albums
-                        .album
-                        .iter()
-                        .cloned()
-                        .zip(years.into_iter())
-                        .enumerate()
-                        .filter(|(_, (ab, yr))| {
-                            ab.playcount.parse::<u64>().unwrap() >= 4
-                                && yr.map(|yr| year_range.contains(&yr)).unwrap_or(true)
-                        })
-                        .map(|(i, (ab, yr))| {
-                            tokio::spawn({
-                                let year_fut = get_release_year(
-                                    Arc::clone(&db),
-                                    Arc::clone(&spotify),
-                                    ab.artist.name.clone(),
-                                    ab.name.clone(),
-                                    ab.url,
-                                );
-                                async move {
-                                    match yr {
-                                        Ok(year) => return Ok((i, Some(year))),
-                                        Err(last_checked)
-                                            if (Utc::now()
-                                                - Utc.timestamp(last_checked as i64, 0))
-                                            .num_days()
-                                                < TTL_DAYS =>
-                                        {
-                                            return Ok((i, None));
-                                        }
-                                        _ => {}
-                                    }
-                                    year_fut.await.map(|yr| (i, yr))
+                    .filter(|(_, ab)| ab.playcount.parse::<u64>().unwrap() >= 4)
+                    .filter_map(|(i, ab)| years[i].err().map(|last_checked| (i, ab, last_checked)))
+                    .map(|(i, ab, last_checked)| {
+                        tokio::spawn({
+                            let year_fut = get_release_year(
+                                Arc::clone(&db),
+                                Arc::clone(&spotify),
+                                ab.artist.name.clone(),
+                                ab.name.clone(),
+                                ab.url,
+                            );
+                            async move {
+                                if (Utc::now() - Utc.timestamp(last_checked as i64, 0)).num_days()
+                                    < TTL_DAYS
+                                {
+                                    return Ok((i, None));
                                 }
-                            })
-                        }),
-                )
-                .buffer_unordered(100)
-                .map(|res| match res {
-                    Ok(inner) => inner,
-                    Err(e) => Err(anyhow::Error::from(e)),
-                })
-                .map(|res| match res {
-                    Ok((i, yr)) => Ok((i, yr.map(|yr| year_range.contains(&yr)).unwrap_or(false))),
-                    Err(e) => Err(e),
-                })
-                .try_collect::<HashMap<usize, bool>>();
-                let album_infos = fetches.await?;
-                aotys.extend(
-                    top_albums
-                        .album
-                        .into_iter()
-                        .enumerate()
-                        .filter(|(i, _)| album_infos.get(i).copied() == Some(true))
-                        .map(|(_, ab)| ab),
-                );
-                Ok(aotys)
+                                year_fut.await.map(|yr| (i, yr))
+                            }
+                        })
+                    }),
+            )
+            .buffer_unordered(50)
+            .map(|res| match res {
+                Ok(inner) => inner,
+                Err(e) => Err(anyhow::Error::from(e)),
             })
-            .await?;
-        Ok(aotys)
+            .map(|res| match res {
+                Ok((i, yr)) => Ok((i, yr.map(|yr| year_range.contains(&yr)).unwrap_or(false))),
+                Err(e) => Err(e),
+            })
+            .try_collect::<HashMap<usize, bool>>();
+            let mut album_infos = fetches.await?;
+            for (i, yr) in years.iter().enumerate() {
+                if let Ok(year) = yr {
+                    album_infos.entry(i).or_insert(year_range.contains(year));
+                }
+            }
+            aotys.extend(
+                top_albums
+                    .album
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| album_infos.get(i).copied() == Some(true))
+                    .map(|(_, ab)| ab)
+                    .inspect(|ab| img_futures.push(tokio::spawn(ab.get_image()))),
+            );
+            if aotys.len() > 25 {
+                break;
+            }
+        }
+        let mut out = Vec::with_capacity(aotys.len());
+        for (album, fut) in aotys.into_iter().zip(img_futures.into_iter()) {
+            let image = fut.await?.ok().flatten();
+            out.push(AlbumWithImage { album, image })
+        }
+        Ok(out)
     }
 
     pub async fn get_songs_of_the_year(
@@ -874,7 +894,8 @@ async fn get_release_year(
                 if !retry {
                     eprintln!("query {} {} failed: {:?}", &artist, &album, &e);
                     set_last_checked(&db, &artist, &album).await?;
-                    break Err(e);
+                    // discard error, best effort
+                    break Ok(None);
                 }
                 // Wait before retrying
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -894,7 +915,7 @@ pub async fn get_release_years<'a, I: IntoIterator<Item = (&'a str, &'a str, usi
         }
         write!(
             &mut query,
-            "('{}', '{}', {})",
+            "(lower('{}'), lower('{}'), {})",
             crate::db::escape_str(ab.0),
             crate::db::escape_str(ab.1),
             ab.2
@@ -905,8 +926,8 @@ pub async fn get_release_years<'a, I: IntoIterator<Item = (&'a str, &'a str, usi
         ")
         SELECT albums_in.pos, album_cache.year, album_cache.last_checked
         FROM album_cache JOIN albums_in
-        ON albums_in.artist LIKE album_cache.artist
-        AND albums_in.album LIKE album_cache.album",
+        ON albums_in.artist = album_cache.artist
+        AND albums_in.album = album_cache.album",
     );
     let db = db.lock().await;
     let mut stmt = db.conn.prepare(&query)?;
@@ -929,7 +950,7 @@ async fn set_release_year(
     year: u64,
 ) -> anyhow::Result<()> {
     let db = db.lock().await;
-    db.conn.execute("INSERT INTO album_cache (artist, album, year) VALUES (?1, ?2, ?3) ON CONFLICT(artist, album) DO NOTHING",
+    db.conn.execute("INSERT INTO album_cache (artist, album, year) VALUES (lower(?1), lower(?2), ?3) ON CONFLICT(artist, album) DO NOTHING",
     params![artist, album, year])?;
     Ok(())
 }
