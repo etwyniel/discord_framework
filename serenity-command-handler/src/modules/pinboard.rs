@@ -1,7 +1,11 @@
+use std::borrow::Cow;
+
 use anyhow::{anyhow, bail, Context as _};
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
+use serenity::model::prelude::Member;
+use serenity::model::user::User;
 use serenity::{
     async_trait,
     model::{
@@ -132,6 +136,14 @@ async fn load_allowed_channels(
     Ok(channels)
 }
 
+fn user_avatar(user: &User, member: Option<&Member>) -> Option<String> {
+    member
+        .and_then(|member| member.avatar.clone())
+        .filter(|av| av.starts_with("http"))
+        .or_else(|| user.avatar_url())
+        .filter(|av| av.starts_with("http"))
+}
+
 pub struct Pinboard;
 
 impl Pinboard {
@@ -174,14 +186,9 @@ impl Pinboard {
         };
         let name = member
             .as_ref()
-            .and_then(|m| m.nick.as_deref())
-            .unwrap_or(&author.name);
-        let avatar = member
-            .as_ref()
-            .and_then(|member| member.avatar.clone())
-            .filter(|av| av.starts_with("http"))
-            .or_else(|| author.avatar_url())
-            .filter(|av| av.starts_with("http"));
+            .map(|m| m.display_name())
+            .unwrap_or(Cow::Borrowed(&author.name));
+        let avatar = user_avatar(author, member.as_ref());
         let channel_name = channel
             .to_channel(&ctx)
             .await?
@@ -212,14 +219,9 @@ impl Pinboard {
             };
             let name = member
                 .as_ref()
-                .and_then(|m| m.nick.as_deref())
-                .unwrap_or(&author.name);
-            let avatar = member
-                .as_ref()
-                .and_then(|member| member.avatar.clone())
-                .filter(|av| av.starts_with("http"))
-                .or_else(|| author.avatar_url())
-                .filter(|av| av.starts_with("http"));
+                .map(|m| m.display_name())
+                .unwrap_or(Cow::Borrowed(&author.name));
+            let avatar = user_avatar(author, member.as_ref());
             // Filter attachments to find images
             let image = reply
                 .attachments
@@ -236,6 +238,7 @@ impl Pinboard {
                             avatar.map(|av| author.icon_url(av));
                             author.name(format!("Replying to {name}"))
                         })
+                        .url(reply.link())
                 }))
             }
         }
@@ -253,7 +256,7 @@ impl Pinboard {
                 .timestamp(last_pin.timestamp)
                 .author(|author| {
                     avatar.as_ref().map(|av| author.icon_url(av));
-                    author.name(name)
+                    author.name(&name).url(last_pin.link())
                 })
             }))
         }
@@ -280,15 +283,15 @@ impl Pinboard {
                 .execute(&ctx.http, true, |message| {
                     message.embeds(embeds);
                     avatar.as_ref().map(|av| message.avatar_url(av));
-                    message.username(name)
+                    message.username(&name)
                 })
                 .await
                 .context("error calling pinboard webhook")?;
-            last_pin
-                .unpin(&ctx.http)
-                .await
-                .context("error deleting pinned message")?;
         }
+        last_pin
+            .unpin(&ctx.http)
+            .await
+            .context("error deleting pinned message")?;
         Ok(())
     }
 }
