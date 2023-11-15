@@ -1,5 +1,7 @@
 use std::{
+    borrow::Cow,
     cmp::{Eq, PartialEq},
+    collections::HashSet,
     fmt::Write,
     hash::Hash,
 };
@@ -212,59 +214,77 @@ pub async fn get_random_quote(
 }
 
 #[derive(Clone)]
-pub struct CaseInsensitiveString(String);
+pub struct CaseInsensitiveString<'a>(Cow<'a, str>);
 
-impl CaseInsensitiveString {
-    fn simplify(&self) -> String {
+impl CaseInsensitiveString<'_> {
+    fn simplify_bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.0
-            .to_lowercase()
-            .chars()
-            .filter(|c| !"\".,?-!&:*$%#".contains(*c))
-            .collect()
+            .bytes()
+            .filter(|b| !"\".,?-!&:*$%#(){}<>'; \t\n|".as_bytes().contains(b))
+            .map(|b| b.to_ascii_lowercase())
     }
 }
 
-impl Hash for CaseInsensitiveString {
+impl Hash for CaseInsensitiveString<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let lower = self.simplify();
-        state.write(lower.as_bytes());
+        self.simplify_bytes().for_each(|b| state.write_u8(b));
     }
 }
 
-impl PartialEq for CaseInsensitiveString {
+impl PartialEq for CaseInsensitiveString<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.simplify() == other.simplify()
+        self.simplify_bytes().eq(other.simplify_bytes())
     }
 }
 
-impl Eq for CaseInsensitiveString {}
+impl Eq for CaseInsensitiveString<'_> {}
 
 pub async fn quotes_markov_chain(
     handler: &Handler,
     guild_id: u64,
     user: Option<u64>,
-) -> anyhow::Result<markov::Chain<CaseInsensitiveString>> {
+    order: Option<usize>,
+) -> anyhow::Result<(
+    markov::Chain<CaseInsensitiveString>,
+    HashSet<CaseInsensitiveString>,
+)> {
     let db = handler.db.lock().await;
     let mut stmt = db.conn.prepare(
         "SELECT contents FROM quote WHERE guild_id = ?1 AND (?2 IS NULL or author_id = ?2)",
     )?;
-    let mut chain = markov::Chain::new();
+    let mut chain = markov::Chain::of_order(order.unwrap_or(1));
+    let mut quotes = HashSet::new();
     stmt.query(params![guild_id, user])?
         .map(|row| crate::db::column_as_string(row.get_ref(0)?))
         .for_each(|quote: String| {
-            quote.split("- <@").enumerate().for_each(|(i, mut msg)| {
+            let parts = quote.split("- <@").collect_vec();
+            parts.iter().copied().enumerate().for_each(|(i, mut msg)| {
                 if i > 0 {
-                    msg = msg.split_once('>').map(|(_, msg)| msg).unwrap_or(msg);
+                    msg = match msg.split_once('\n') {
+                        None => return,
+                        Some((_, s)) => s,
+                    };
+                    // msg = msg.split_once('').map(|(_, msg)| msg).unwrap_or(msg);
                 }
+                if let Some(user_id) = user {
+                    let author_id = parts
+                        .get(i + 1)
+                        .and_then(|next| next.split_once('>'))
+                        .and_then(|(id, _)| id.parse::<u64>().ok());
+                    if author_id.is_some_and(|id| id != user_id) {
+                        return;
+                    }
+                }
+                quotes.insert(CaseInsensitiveString(Cow::Owned(msg.to_string())));
                 chain.feed(
                     msg.split_whitespace()
-                        .map(|s| CaseInsensitiveString(s.to_string()))
+                        .map(|s| CaseInsensitiveString(Cow::Owned(s.to_string())))
                         .collect::<Vec<_>>(),
                 );
             });
             Ok(())
         })?;
-    Ok(chain)
+    Ok((chain, quotes))
 }
 
 pub async fn list_quotes(
@@ -343,7 +363,7 @@ impl GetQuote {
             .unwrap_or("unknown-channel");
         let hide_author = self.hide_author == Some(true);
         let mut contents = format!(
-            "{}\n - <@{}> [(Source)]({})",
+            "{}\n- <@{}> [(Source)]({})",
             &quote.contents, quote.author_id, message_url
         );
         let author_avatar = if hide_author {
@@ -414,6 +434,7 @@ impl BotCommand for SaveQuote {
 pub struct FakeQuote {
     user: Option<UserId>,
     start: Option<String>,
+    order: Option<usize>,
 }
 
 #[async_trait]
@@ -425,29 +446,45 @@ impl BotCommand for FakeQuote {
         _ctx: &Context,
         opts: &ApplicationCommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let chain = quotes_markov_chain(
+        let (chain, quotes) = quotes_markov_chain(
             handler,
             opts.guild_id
                 .ok_or_else(|| anyhow!("must be run in a guild"))?
                 .0,
             self.user.map(|u| u.0),
+            self.order,
         )
         .await?;
-        let mut resp = if let Some(start) = self.start {
-            chain.generate_from_token(CaseInsensitiveString(start))
-            // chain.generate_str_from_token(&start)
-        } else {
-            chain.generate()
+        let mut resp = String::new();
+        for _ in 0..100 {
+            resp = if let Some(start) = &self.start {
+                chain.generate_from_token(CaseInsensitiveString(start.into()))
+                // chain.generate_str_from_token(&start)
+            } else {
+                chain.generate()
+            }
+            .into_iter()
+            .map(|CaseInsensitiveString(s)| s)
+            .join(" ");
+            if !quotes.contains(&CaseInsensitiveString(resp.as_str().into())) {
+                break;
+            }
+            eprintln!("generated a real quote, trying again");
         }
-        .into_iter()
-        .map(|CaseInsensitiveString(s)| s)
-        .join(" ");
         if resp.is_empty() {
             resp = "Failed to generate quote".to_string();
         } else if let Some(UserId(id)) = self.user {
             write!(&mut resp, "\n - <@{id}>").unwrap();
         }
         Ok(CommandResponse::Public(resp))
+    }
+
+    fn setup_options(opt_name: &'static str, opt: &mut CreateApplicationCommandOption) {
+        if opt_name == "order" {
+            opt.min_int_value(1).max_int_value(4).description(
+                "Markov chain order. Higher = closer to real quotes but more coherent",
+            );
+        }
     }
 }
 
