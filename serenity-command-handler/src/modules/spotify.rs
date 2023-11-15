@@ -101,8 +101,10 @@ impl<C: BaseClient> Spotify<C> {
         }
         if let Some(id) = url.strip_prefix(TRACK_URL_START) {
             self.get_song_from_id(id.split('?').next().unwrap()).await
+        } else if url.starts_with(ALBUM_URL_START) {
+            bail!("Expected a spotify track URL, got an album URL")
         } else {
-            bail!("Invalid spotify url")
+            bail!("Invalid spotify URL")
         }
     }
 
