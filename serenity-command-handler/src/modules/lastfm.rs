@@ -1,6 +1,7 @@
 use anyhow::{bail, Context as _};
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use fallible_iterator::FallibleIterator;
+use futures::future::BoxFuture;
 use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt};
 use image::imageops::FilterType;
 use image::io::Reader;
@@ -14,11 +15,13 @@ use serde::Deserialize;
 use serenity::async_trait;
 use serenity::builder::CreateEmbed;
 use serenity::json::JsonMap;
+use serenity::model::prelude::autocomplete::AutocompleteInteraction;
+use serenity::model::prelude::command::CommandType;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
 use serenity::model::prelude::interaction::InteractionResponseType;
 use serenity::model::prelude::AttachmentType;
 use serenity::prelude::{Context, Mutex};
-use serenity_command::{BotCommand, CommandResponse};
+use serenity_command::{BotCommand, CommandKey, CommandResponse};
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -30,6 +33,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::command_context::{get_focused_option, get_str_opt_ac};
 use crate::db::Db;
 use crate::modules::Spotify;
 use crate::prelude::*;
@@ -704,9 +708,11 @@ impl Lastfm {
                                 ab.url,
                             );
                             async move {
-                                if (Utc::now() - Utc.timestamp(last_checked as i64, 0)).num_days()
-                                    < TTL_DAYS
-                                {
+                                let last_checked = Utc
+                                    .timestamp_opt(last_checked as i64, 0)
+                                    .earliest()
+                                    .unwrap_or_default();
+                                if (Utc::now() - last_checked).num_days() < TTL_DAYS {
                                     return Ok((i, None));
                                 }
                                 year_fut.await.map(|yr| (i, yr))
@@ -800,9 +806,11 @@ impl Lastfm {
                 let Some(yr) = (match cached_year {
                     Ok(year) => Some(year),
                     Err(last_checked) => {
-                        if (Utc::now() - Utc.timestamp(last_checked as i64, 0)).num_days()
-                            < TTL_DAYS
-                        {
+                        let last_checked = Utc
+                            .timestamp_opt(last_checked as i64, 0)
+                            .earliest()
+                            .unwrap_or_default();
+                        if (Utc::now() - last_checked).num_days() < TTL_DAYS {
                             None
                         } else {
                             get_release_year(
@@ -958,7 +966,7 @@ async fn set_release_year(
 async fn set_last_checked(db: &Mutex<Db>, artist: &str, album: &str) -> anyhow::Result<()> {
     let db = db.lock().await;
     db.conn.execute("INSERT INTO album_cache (artist, album, last_checked) VALUES (?1, ?2, ?3) ON CONFLICT(artist, album) DO UPDATE SET last_checked = ?3",
-    params![artist, album, Utc::now().timestamp()])?;
+    params![artist.to_lowercase(), album.to_lowercase(), Utc::now().timestamp()])?;
     Ok(())
 }
 
@@ -967,7 +975,7 @@ fn get_release_year_db(db: &Db, artist: &str, album: &str) -> Result<u64, u64> {
         .conn
         .query_row(
             "SELECT year, last_checked FROM album_cache WHERE artist = ?1 AND album = ?2",
-            [artist, album],
+            [artist.to_lowercase(), album.to_lowercase()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap_or((None, None));
@@ -976,6 +984,109 @@ fn get_release_year_db(db: &Db, artist: &str, album: &str) -> Result<u64, u64> {
         (None, Some(last_checked)) => Err(last_checked),
         (None, None) => Err(0),
     }
+}
+
+#[derive(Command, Debug)]
+#[cmd(
+    name = "fix_release_year",
+    desc = "Correct or set the release year of an album"
+)]
+pub struct FixReleaseYear {
+    #[cmd(desc = "Album artist", autocomplete)]
+    pub artist: String,
+    #[cmd(desc = "Album title", autocomplete)]
+    pub album: String,
+    pub year: i64,
+}
+
+#[async_trait]
+impl BotCommand for FixReleaseYear {
+    type Data = Handler;
+
+    async fn run(
+        self,
+        handler: &Handler,
+        _ctx: &Context,
+        _opts: &ApplicationCommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let db = handler.db.lock().await;
+        let current_value = match get_release_year_db(&db, &self.artist, &self.album) {
+            Ok(year) if year == self.year as u64 => bail!("Release year is already {year}"),
+            Ok(year) => Some(year),
+            Err(0) => bail!("Album not found in database, check spelling?"),
+            _ => None,
+        };
+        db.conn.execute(
+            "UPDATE album_cache SET year = ?3, last_checked = 0 WHERE artist = ?1 AND album = ?2",
+            params![
+                self.artist.to_lowercase(),
+                self.album.to_lowercase(),
+                self.year
+            ],
+        )?;
+        let mut resp = format!(
+            "Updated release year of {} - {} to {}",
+            &self.artist, &self.album, self.year
+        );
+        if let Some(prev) = current_value {
+            resp.push_str(&format!(" (was {prev})"));
+        }
+        Ok(CommandResponse::Public(resp))
+    }
+}
+
+#[allow(clippy::let_and_return)] // doesn't compile if the lint is obeyed....
+fn complete_album<'a>(
+    handler: &'a Handler,
+    ctx: &'a Context,
+    key: CommandKey<'a>,
+    ac: &'a AutocompleteInteraction,
+) -> BoxFuture<'a, anyhow::Result<bool>> {
+    async move {
+        if key != ("fix_release_year", CommandType::ChatInput) {
+            return Ok(false);
+        }
+
+        let options = &ac.data.options;
+        let Some(focused) = get_focused_option(options) else {
+            return Ok(false);
+        };
+
+        let artist = get_str_opt_ac(options, "artist").unwrap_or_default();
+        let album = get_str_opt_ac(options, "album").unwrap_or_default();
+
+        let field = match focused {
+            "artist" | "album" => focused,
+            _ => bail!("Invalid option '{focused}'"),
+        };
+        let qry = format!(
+            "SELECT {field} FROM album_cache
+                          WHERE artist LIKE '%' || ?1 || '%' AND album LIKE '%' || ?2 || '%'
+                          GROUP BY {field}
+                          LIMIT 15"
+        );
+
+        let values: Vec<String> = {
+            let db = handler.db.lock().await;
+            let mut stmt = db.conn.prepare(&qry)?;
+            let values = stmt
+                .query_map([artist.to_lowercase(), album.to_lowercase()], |row| {
+                    row.get(0)
+                })?
+                .collect::<Result<_, _>>()?;
+            values
+        };
+
+        ac.create_autocomplete_response(&ctx.http, |r| {
+            values.into_iter().for_each(|val| {
+                r.add_string_choice(&val, &val);
+            });
+            r
+        })
+        .await?;
+        Ok(true)
+    }
+    .boxed()
 }
 
 #[async_trait]
@@ -1002,7 +1113,9 @@ impl Module for Lastfm {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, completions: &mut CompletionStore) {
         store.register::<GetAotys>();
+        store.register::<FixReleaseYear>();
+        completions.push(complete_album);
     }
 }
