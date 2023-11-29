@@ -215,22 +215,21 @@ impl<C: BaseClient> Spotify<C> {
             .client
             .search(&query, SearchType::Album, None, None, Some(5), None)
             .await?;
-        if let rspotify::model::SearchResult::Albums(albums) = res {
-            let album = albums
-                .items
-                .iter()
-                .find(|ab| ab.name == name)
-                .or_else(|| albums.items.first());
-            Ok(album.map(|a| Album {
-                name: Some(a.name.clone()),
-                artist: a.artists.first().map(|ar| ar.name.clone()),
-                url: a.id.as_ref().map(|i| i.url()),
-                release_date: a.release_date.clone(),
-                ..Default::default()
-            }))
-        } else {
-            Err(anyhow!("Not an album"))
-        }
+        let rspotify::model::SearchResult::Albums(albums) = res else {
+            return Err(anyhow!("Not an album"));
+        };
+        let album = albums
+            .items
+            .iter()
+            .find(|ab| ab.name == name)
+            .or_else(|| albums.items.first());
+        Ok(album.map(|a| Album {
+            name: Some(a.name.clone()),
+            artist: a.artists.first().map(|ar| ar.name.clone()),
+            url: a.id.as_ref().map(|i| i.url()),
+            release_date: a.release_date.clone(),
+            ..Default::default()
+        }))
     }
 
     pub async fn query_songs(&self, query: &str) -> anyhow::Result<Vec<(String, String)>> {
@@ -238,28 +237,27 @@ impl<C: BaseClient> Spotify<C> {
             .client
             .search(query, SearchType::Track, None, None, Some(10), None)
             .await?;
-        if let rspotify::model::SearchResult::Tracks(songs) = res {
-            Ok(songs
-                .items
-                .into_iter()
-                .map(|a| {
-                    (
-                        format!(
-                            "{} - {}",
-                            a.artists
-                                .into_iter()
-                                .next()
-                                .map(|ar| ar.name)
-                                .unwrap_or_default(),
-                            a.name,
-                        ),
-                        a.id.map(|id| id.url()).unwrap_or_default(),
-                    )
-                })
-                .collect())
-        } else {
-            Err(anyhow!("Not an album"))
-        }
+        let rspotify::model::SearchResult::Tracks(songs) = res else {
+            return Err(anyhow!("Not an album"));
+        };
+        Ok(songs
+            .items
+            .into_iter()
+            .map(|a| {
+                (
+                    format!(
+                        "{} - {}",
+                        a.artists
+                            .into_iter()
+                            .next()
+                            .map(|ar| ar.name)
+                            .unwrap_or_default(),
+                        a.name,
+                    ),
+                    a.id.map(|id| id.url()).unwrap_or_default(),
+                )
+            })
+            .collect())
     }
 }
 

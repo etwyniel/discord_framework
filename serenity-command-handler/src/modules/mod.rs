@@ -28,3 +28,5 @@ pub mod album_lookup;
 pub use album_lookup::AlbumLookup;
 
 pub mod bdays;
+
+pub mod sql;
