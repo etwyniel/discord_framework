@@ -5,9 +5,9 @@ use anyhow::anyhow;
 use chrono::{Datelike, Local, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
 use rusqlite::params;
-use serenity::builder::{CreateApplicationCommandOption, CreateEmbed};
+use serenity::builder::{CreateCommandOption, CreateEmbed, CreateEmbedAuthor};
 use serenity::http::Http;
-use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
+use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::GuildId;
 use serenity::{async_trait, prelude::Context};
 use serenity_command::{BotCommand, CommandResponse};
@@ -74,12 +74,12 @@ impl BotCommand for GetBdays {
         self,
         handler: &Handler,
         ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let guild_id = opts
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .0;
+            .get();
         let mut bdays = get_bdays(handler, guild_id).await?;
         let today = Utc::now().date_naive();
         let current_day = today.day() as u8;
@@ -100,9 +100,10 @@ impl BotCommand for GetBdays {
         } else {
             "Birthdays".to_string()
         };
-        let mut embed = CreateEmbed::default();
-        embed.author(|a| a.name(header)).description(res);
-        Ok(CommandResponse::Embed(embed))
+        let embed = CreateEmbed::default()
+            .author(CreateEmbedAuthor::new(header))
+            .description(res);
+        Ok(CommandResponse::Embed(Box::new(embed)))
     }
 }
 
@@ -124,13 +125,13 @@ impl BotCommand for SetBday {
         self,
         handler: &Handler,
         _ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let user_id = opts.user.id.0;
+        let user_id = opts.user.id.get();
         let guild_id = opts
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .0;
+            .get();
         add_birthday(
             handler,
             guild_id,
@@ -143,10 +144,10 @@ impl BotCommand for SetBday {
         Ok(CommandResponse::Private("Birthday set!".to_string()))
     }
 
-    fn setup_options(opt_name: &'static str, opt: &mut CreateApplicationCommandOption) {
+    fn setup_options(opt_name: &'static str, mut opt: CreateCommandOption) -> CreateCommandOption {
         match opt_name {
             "day" => {
-                opt.min_int_value(1).max_int_value(31);
+                opt = opt.min_int_value(1).max_int_value(31);
             }
             "month" => {
                 const MONTHS: [&str; 12] = [
@@ -163,12 +164,13 @@ impl BotCommand for SetBday {
                     "November",
                     "December",
                 ];
-                MONTHS.iter().enumerate().for_each(|(n, month)| {
-                    opt.add_int_choice(month, n as i32 + 1);
+                opt = MONTHS.iter().enumerate().fold(opt, |opt, (n, &month)| {
+                    opt.add_int_choice(month, n as i32 + 1)
                 });
             }
             _ => {}
         }
+        opt
     }
 }
 
@@ -178,14 +180,13 @@ async fn wish_bday(http: &Http, user_id: u64, guild_id: GuildId) -> anyhow::Resu
     let channel = channels
         .values()
         .find(|chan| chan.name() == "general")
-        .or_else(|| {
-            channels
-                .values()
-                .find(|chan| chan.position == 0 || chan.position == -1)
-        })
+        .or_else(|| channels.values().find(|chan| chan.position == 0))
         .ok_or_else(|| anyhow!("Could not find a suitable channel"))?;
     channel
-        .say(http, format!("Happy birthday to <@{}>!", member.user.id.0))
+        .say(
+            http,
+            format!("Happy birthday to <@{}>!", member.user.id.get()),
+        )
         .await?;
     Ok(())
 }
@@ -212,7 +213,7 @@ pub async fn bday_loop(db: Arc<Mutex<Db>>, http: Arc<Http>) {
                 .collect::<Vec<_>>()
         };
         for (guild_id, user_id) in guilds_and_users {
-            if let Err(e) = wish_bday(http.as_ref(), user_id, GuildId(guild_id)).await {
+            if let Err(e) = wish_bday(http.as_ref(), user_id, GuildId::new(guild_id)).await {
                 eprintln!("Error wishing user birthday: {e:?}");
             }
         }

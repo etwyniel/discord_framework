@@ -11,7 +11,7 @@ use rspotify::{
 };
 use serenity::{
     async_trait,
-    model::prelude::interaction::application_command::ApplicationCommandInteraction,
+    model::prelude::CommandInteraction,
     model::{channel::Message, prelude::Reaction},
 };
 use serenity::{http::Http, model::prelude::ReactionType, prelude::*};
@@ -288,10 +288,15 @@ impl Spotify<AuthCodeSpotify> {
         // if let Some(tok) = prev_token {
         //     *client.token.lock().await.unwrap() = Some(tok);
         // } else {
-        let url = client.get_authorize_url(false)?;
+        let url = client
+            .get_authorize_url(false)
+            .context("failed to generate authorization url")?;
         // eprintln!("url: {url}");
         // }
-        client.prompt_for_token(&url).await?;
+        client
+            .prompt_for_token(&url)
+            .await
+            .context("failed to prompt for token")?;
         Ok(Spotify { client })
     }
 }
@@ -341,7 +346,7 @@ pub async fn handle_message(http: &Http, message: &Message) -> anyhow::Result<()
     if !message.content.contains(SHORTENED_URL_START) {
         return Ok(());
     }
-    let offset = message.id.0 % 64;
+    let offset = message.id.get() % 64;
     let mask = !(1 << offset);
     UNLINK_CACHE.fetch_and(mask, std::sync::atomic::Ordering::AcqRel);
     message
@@ -358,7 +363,7 @@ pub async fn handle_reaction(
     if !react.emoji.unicode_eq(UNLINK_REACT) || handler.self_id.get().copied() == react.user_id {
         return Ok(());
     }
-    let offset = react.message_id.0 % 64;
+    let offset = react.message_id.get() % 64;
     let mask = 1 << offset;
     let previous = UNLINK_CACHE.fetch_or(mask, std::sync::atomic::Ordering::AcqRel);
     if previous & mask != 0 {
@@ -388,7 +393,7 @@ impl BotCommand for Unlink {
         self,
         _: &Handler,
         _: &Context,
-        _: &ApplicationCommandInteraction,
+        _: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let urls = resolve_spotify_links(&self.0.content).await?;
         if urls.is_empty() {

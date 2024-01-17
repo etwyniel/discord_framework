@@ -5,9 +5,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context as _};
 use itertools::Itertools;
+use serenity::builder::{
+    CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage,
+    EditInteractionResponse, EditMessage,
+};
 use serenity::http::Http;
 use serenity::model::id::MessageId;
-use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
+use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::{ChannelId, Message, Reaction, ReactionType, UserId};
 use serenity::{async_trait, prelude::Context};
 use serenity_command::{BotCommand, CommandResponse};
@@ -71,27 +75,28 @@ async fn create_poll(
     poll_type: PollType,
     handler: &Handler,
     ctx: &Context,
-    interaction: &ApplicationCommandInteraction,
+    interaction: &CommandInteraction,
 ) -> anyhow::Result<()> {
     let module: &ModPoll = handler.module()?;
     let http = &ctx.http;
     // create initial response to the interaction
     interaction
-        .create_interaction_response(http, |msg| {
-            msg.interaction_response_data(|data| {
-                let content = match &poll_type {
-                    PollType::Ready { .. } => "Ready?".to_string(),
-                    PollType::Question(q) => q.clone(),
-                };
-                data.content(&content)
-                    .allowed_mentions(|mentions| mentions.empty_users())
-            })
-        })
+        .create_response(
+            http,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .content(match &poll_type {
+                        PollType::Ready { .. } => "Ready?".to_string(),
+                        PollType::Question(q) => q.clone(),
+                    })
+                    .allowed_mentions(CreateAllowedMentions::new().empty_users()),
+            ),
+        )
         .await
         .context("error creating response")?;
 
     // retrieve handle to interaction response so we can edit it later
-    let resp = interaction.get_interaction_response(http).await?;
+    let resp = interaction.get_response(http).await?;
     // create async channel in order to process reactions asynchronously
     let (sender, receiver) = channel(32);
 
@@ -143,7 +148,7 @@ impl ReadyPoll {
         self,
         handler: &Handler,
         ctx: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<()> {
         let poll_type = PollType::Ready {
             count_emote: self.count_emote,
@@ -165,7 +170,7 @@ impl Poll {
         self,
         handler: &Handler,
         ctx: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<()> {
         let poll_type = PollType::Question(self.question);
         create_poll(poll_type, handler, ctx, interaction).await
@@ -180,7 +185,7 @@ impl BotCommand for ReadyPoll {
         self,
         handler: &Handler,
         ctx: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         // create ready poll message
         let resp = match self.create_poll(handler, ctx, interaction).await {
@@ -193,9 +198,12 @@ impl BotCommand for ReadyPoll {
         // in case creating the poll failed, try to edit the interaction response with an error message
         if let Some(resp) = resp {
             interaction
-                .edit_original_interaction_response(&ctx.http, |msg| {
-                    msg.content(resp).allowed_mentions(|m| m.empty_users())
-                })
+                .edit_response(
+                    &ctx.http,
+                    EditInteractionResponse::new()
+                        .content(resp)
+                        .allowed_mentions(CreateAllowedMentions::new().empty_users()),
+                )
                 .await?;
         }
         Ok(CommandResponse::None)
@@ -210,7 +218,7 @@ impl BotCommand for Poll {
         self,
         handler: &Handler,
         ctx: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         // create ready poll message
         let resp = match self.create_poll(handler, ctx, interaction).await {
@@ -223,9 +231,12 @@ impl BotCommand for Poll {
         // in case creating the poll failed, try to edit the interaction response with an error message
         if let Some(resp) = resp {
             interaction
-                .edit_original_interaction_response(&ctx.http, |msg| {
-                    msg.content(resp).allowed_mentions(|m| m.empty_users())
-                })
+                .edit_response(
+                    &ctx.http,
+                    EditInteractionResponse::new()
+                        .content(resp)
+                        .allowed_mentions(CreateAllowedMentions::new().empty_users()),
+                )
                 .await?;
         }
         Ok(CommandResponse::None)
@@ -233,7 +244,7 @@ impl BotCommand for Poll {
 }
 
 fn format_user_list(buf: &mut String, users: &[UserId]) {
-    buf.push_str(&users.iter().map(|UserId(u)| format!("<@{u}>")).join(", "));
+    buf.push_str(&users.iter().map(|u| format!("<@{}>", u.get())).join(", "));
 }
 
 // build ready poll message.
@@ -351,9 +362,12 @@ async fn poll_task(
             let mut msg = poll.msg.clone();
             async move {
                 let res = msg
-                    .edit(http.as_ref(), |msg| {
-                        msg.content(content).allowed_mentions(|m| m.empty_users())
-                    })
+                    .edit(
+                        http.as_ref(),
+                        EditMessage::new()
+                            .content(content)
+                            .allowed_mentions(CreateAllowedMentions::new().empty_users()),
+                    )
                     .await;
                 if let Err(e) = res {
                     eprintln!("failed to edit ready message: {e}");

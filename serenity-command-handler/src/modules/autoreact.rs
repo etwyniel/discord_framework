@@ -6,14 +6,9 @@ use futures::{future::BoxFuture, FutureExt};
 use rusqlite::{params, Connection};
 use serenity::{
     async_trait,
-    model::prelude::{
-        command::CommandType,
-        interaction::{
-            application_command::ApplicationCommandInteraction,
-            autocomplete::AutocompleteInteraction,
-        },
-        Message, Permissions, ReactionType,
-    },
+    builder::{CreateAutocompleteResponse, CreateInteractionResponse},
+    model::application::CommandType,
+    model::prelude::{CommandInteraction, Message, Permissions, ReactionType},
     prelude::{Context, RwLock},
 };
 
@@ -90,13 +85,13 @@ impl BotCommand for AddAutoreact {
         self,
         handler: &Handler,
         _ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let trigger = self.trigger.to_lowercase();
         let guild_id = opts
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .0;
+            .get();
         let parsed = AutoReact::new(&trigger, &self.emote)?;
         {
             let db = handler.db.lock().await;
@@ -115,7 +110,7 @@ impl BotCommand for AddAutoreact {
         Ok(CommandResponse::Private("Autoreact added".to_string()))
     }
 
-    const PERMISSIONS: Permissions = Permissions::MANAGE_EMOJIS_AND_STICKERS;
+    const PERMISSIONS: Permissions = Permissions::MANAGE_GUILD_EXPRESSIONS;
 }
 
 #[derive(Command)]
@@ -137,13 +132,13 @@ impl BotCommand for RemoveAutoreact {
         self,
         handler: &Handler,
         _ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let trigger = self.trigger.to_lowercase();
         let guild_id = opts
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .0;
+            .get();
         {
             let db = handler.db.lock().await;
             db.conn.execute(
@@ -158,7 +153,7 @@ impl BotCommand for RemoveAutoreact {
         Ok(CommandResponse::Private("Autoreact removed".to_string()))
     }
 
-    const PERMISSIONS: Permissions = Permissions::MANAGE_EMOJIS_AND_STICKERS;
+    const PERMISSIONS: Permissions = Permissions::MANAGE_GUILD_EXPRESSIONS;
 }
 
 impl Handler {
@@ -211,7 +206,7 @@ impl ModAutoreacts {
         let mut indices = Vec::new();
         let cache = self.cache.read().await;
         let guild_id = match msg.guild_id {
-            Some(id) => id.0,
+            Some(id) => id.get(),
             None => return Ok(()),
         };
         let reacts = match cache.get(&guild_id) {
@@ -257,7 +252,7 @@ impl ModAutoreacts {
         handler: &'a Handler,
         ctx: &'a Context,
         key: CommandKey<'a>,
-        ac: &'a AutocompleteInteraction,
+        ac: &'a CommandInteraction,
     ) -> BoxFuture<'a, anyhow::Result<bool>> {
         async move {
             if key != ("remove_autoreact", CommandType::ChatInput) {
@@ -266,7 +261,7 @@ impl ModAutoreacts {
             let guild_id = ac
                 .guild_id
                 .ok_or_else(|| anyhow!("must be run in a guild"))?
-                .0;
+                .get();
             let options = &ac.data.options;
             let trigger = get_str_opt_ac(options, "trigger").unwrap_or("");
             let emote = get_str_opt_ac(options, "emote").unwrap_or("");
@@ -279,13 +274,11 @@ impl ModAutoreacts {
                 .into_iter()
                 .map(|(trigger, emote)| if focused == "trigger" { trigger } else { emote })
                 .map(|v| (v.clone(), v));
-            ac.create_autocomplete_response(&ctx.http, |r| {
-                it.for_each(|(name, value)| {
-                    r.add_string_choice(name, value);
-                });
-                r
-            })
-            .await?;
+            let resp = it.fold(CreateAutocompleteResponse::new(), |resp, (name, value)| {
+                resp.add_string_choice(name, value)
+            });
+            ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
+                .await?;
             Ok(true)
         }
         .boxed()

@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
+use serenity::all::InteractionResponseFlags;
 use serenity::async_trait;
-use serenity::builder::{CreateApplicationCommand, CreateApplicationCommandOption, CreateEmbed};
-use serenity::model::application::interaction::application_command::{
-    ApplicationCommandInteraction, CommandData,
-};
-use serenity::model::prelude::command::CommandType;
-use serenity::model::prelude::interaction::MessageFlags;
+use serenity::builder::{CreateCommand, CreateCommandOption, CreateEmbed};
+use serenity::model::application::{CommandData, CommandInteraction, CommandType};
 use serenity::model::prelude::GuildId;
 use serenity::model::Permissions;
 use serenity::prelude::Context;
@@ -16,7 +13,7 @@ pub enum CommandResponse {
     None,
     Public(String),
     Private(String),
-    Embed(CreateEmbed),
+    Embed(Box<CreateEmbed>),
 }
 
 pub type CommandKey<'a> = (&'a str, CommandType);
@@ -45,32 +42,38 @@ pub trait BotCommand {
         self,
         data: &Self::Data,
         ctx: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse>;
 
-    fn setup_options(_opt_name: &'static str, _opt: &mut CreateApplicationCommandOption) {}
+    fn setup_options(_opt_name: &'static str, opt: CreateCommandOption) -> CreateCommandOption {
+        opt
+    }
 
     const PERMISSIONS: Permissions = Permissions::empty();
     const GUILD: Option<GuildId> = None;
 }
 
 impl CommandResponse {
-    pub fn to_contents_and_flags(self) -> Option<(String, Option<CreateEmbed>, MessageFlags)> {
+    pub fn to_contents_and_flags(
+        self,
+    ) -> Option<(String, Option<Box<CreateEmbed>>, InteractionResponseFlags)> {
         Some(match self {
             CommandResponse::None => return None,
-            CommandResponse::Public(s) => (s, None, MessageFlags::empty()),
-            CommandResponse::Private(s) => (s, None, MessageFlags::EPHEMERAL),
-            CommandResponse::Embed(e) => (String::new(), Some(e), MessageFlags::empty()),
+            CommandResponse::Public(s) => (s, None, InteractionResponseFlags::empty()),
+            CommandResponse::Private(s) => (s, None, InteractionResponseFlags::EPHEMERAL),
+            CommandResponse::Embed(e) => {
+                (String::new(), Some(e), InteractionResponseFlags::empty())
+            }
         })
     }
 }
 
 pub trait CommandBuilder<'a>: BotCommand + From<&'a CommandData> + 'static {
-    fn create_extras<E: Fn(&'static str, &mut CreateApplicationCommandOption)>(
-        builder: &mut CreateApplicationCommand,
+    fn create_extras<E: Fn(&'static str, CreateCommandOption) -> CreateCommandOption>(
+        builder: CreateCommand,
         extras: E,
-    ) -> &mut CreateApplicationCommand;
-    fn create(builder: &mut CreateApplicationCommand) -> &mut CreateApplicationCommand;
+    ) -> CreateCommand;
+    fn create(builder: CreateCommand) -> CreateCommand;
     const NAME: &'static str;
     const TYPE: CommandType = CommandType::ChatInput;
     fn runner() -> Box<dyn CommandRunner<Self::Data> + Send + Sync>;
@@ -82,13 +85,10 @@ pub trait CommandRunner<T> {
         &self,
         data: &T,
         ctx: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse>;
     fn name(&self) -> CommandKey<'static>;
-    fn register<'a>(
-        &self,
-        builder: &'a mut CreateApplicationCommand,
-    ) -> &'a mut CreateApplicationCommand;
+    fn register(&self) -> CreateCommand;
 
     fn guild(&self) -> Option<GuildId> {
         None

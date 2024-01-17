@@ -1,4 +1,4 @@
-use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
+use serenity::model::prelude::CommandInteraction;
 use serenity::{async_trait, prelude::Context};
 use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
@@ -29,7 +29,7 @@ impl BotCommand for LookupAlbum {
         self,
         handler: &Handler,
         _ctx: &Context,
-        _opts: &ApplicationCommandInteraction,
+        _opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let mut info = match handler
             .module::<AlbumLookup>()?

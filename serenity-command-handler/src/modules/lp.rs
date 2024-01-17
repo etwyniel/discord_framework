@@ -8,14 +8,20 @@ use chrono::{prelude::*, Duration};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use regex::Regex;
+use serenity::all::AutoArchiveDuration;
 use serenity::async_trait;
+use serenity::builder::CreateAllowedMentions;
+use serenity::builder::CreateAutocompleteResponse;
+use serenity::builder::CreateInteractionResponse;
+use serenity::builder::CreateThread;
+use serenity::builder::EditThread;
+use serenity::builder::ExecuteWebhook;
 use serenity::client::Context;
-use serenity::model::application::interaction::application_command::CommandDataOption;
+use serenity::model::application::CommandDataOption;
+use serenity::model::application::CommandType;
 use serenity::model::channel::ChannelType;
 use serenity::model::id::GuildId;
-use serenity::model::prelude::command::CommandType;
-use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
-use serenity::model::prelude::interaction::autocomplete::AutocompleteInteraction;
+use serenity::model::prelude::CommandInteraction;
 use serenity_command_derive::Command;
 
 use crate::album::Album;
@@ -131,7 +137,7 @@ impl BotCommand for Lp {
         self,
         handler: &Handler,
         ctx: &Context,
-        command: &ApplicationCommandInteraction,
+        command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let Lp {
             album,
@@ -171,7 +177,7 @@ impl BotCommand for Lp {
             info.genres = genres
         }
 
-        let guild_id = command.guild_id()?.0;
+        let guild_id = command.guild_id()?.get();
         let role_id = handler.get_guild_field(guild_id, "role_id").await?;
         let resp_content =
             build_message_contents(lp_name.as_deref(), &info, time.as_deref(), role_id).await?;
@@ -184,7 +190,7 @@ impl BotCommand for Lp {
             // Send LP message through webhook
             // This lets us impersonate the user who sent the command
             let user = &command.user;
-            let avatar_url = GuildId(guild_id)
+            let avatar_url = GuildId::new(guild_id)
                 .member(http, user)
                 .await?
                 .avatar_url()
@@ -194,12 +200,15 @@ impl BotCommand for Lp {
                 .await
                 .map(Cow::Owned)
                 .unwrap_or_else(|| Cow::Borrowed(&user.name));
-            wh.execute(http, true, |msg| {
-                msg.content(&resp_content)
-                    .allowed_mentions(|mentions| mentions.roles(role_id))
-                    .username(nick);
-                avatar_url.map(|url| msg.avatar_url(url));
-                msg
+            wh.execute(http, true, {
+                let mut webhook = ExecuteWebhook::new()
+                    .content(&resp_content)
+                    .allowed_mentions(CreateAllowedMentions::new().roles(role_id))
+                    .username(nick.as_str());
+                if let Some(url) = avatar_url.as_ref() {
+                    webhook = webhook.avatar_url(url);
+                }
+                webhook
             })
             .await?
             .unwrap() // Message is present because we set wait to true in execute
@@ -218,22 +227,23 @@ impl BotCommand for Lp {
             // Create a thread from the response message for the LP to take place in
             let chan = message.channel(http).await?;
             let thread_name = info.name.as_deref().unwrap_or("Listening party");
-            let guild_chan = chan.guild().map(|c| (c.kind, c));
-            if let (None, Some((ChannelType::PublicThread, c))) = (&webhook, &guild_chan) {
+            let mut guild_chan = chan.guild().map(|c| (c.kind, c));
+            if let (None, Some((ChannelType::PublicThread, c))) = (&webhook, &mut guild_chan) {
                 // If we're already in a thread, just rename it
                 // unless we are using a webhook, in which case we can create a new thread
-                c.edit_thread(http, |t| t.name(thread_name)).await?;
+                c.edit_thread(http, EditThread::new().name(thread_name))
+                    .await?;
             } else if let Some((ChannelType::Text, c)) = &guild_chan {
                 // Create thread from response message
                 let thread = c
-                    .create_public_thread(http, message.id, |thread| {
-                        thread
-                            .name(thread_name)
+                    .create_thread(
+                        http,
+                        CreateThread::new(thread_name)
                             .kind(ChannelType::PublicThread)
-                            .auto_archive_duration(60)
-                    })
+                            .auto_archive_duration(AutoArchiveDuration::OneHour),
+                    )
                     .await?;
-                response = format!("LP created: <#{}>", thread.id.as_u64());
+                response = format!("LP created: <#{}>", thread.id.get());
             }
         }
         if let Some(wh) = wh {
@@ -289,20 +299,20 @@ impl ModLp {
         handler: &'a Handler,
         ctx: &'a Context,
         key: CommandKey<'a>,
-        ac: &'a AutocompleteInteraction,
+        ac: &'a CommandInteraction,
     ) -> BoxFuture<'a, anyhow::Result<bool>> {
         async move {
             if key != ("lp", CommandType::ChatInput) {
                 return Ok(false);
             }
             let choices = Self::autocomplete_lp(handler, &ac.data.options).await?;
-            ac.create_autocomplete_response(&ctx.http, |r| {
-                choices.into_iter().for_each(|(name, value)| {
-                    r.add_string_choice(name, value);
+            let resp = choices
+                .into_iter()
+                .fold(CreateAutocompleteResponse::new(), |resp, (name, value)| {
+                    resp.add_string_choice(name, value)
                 });
-                r
-            })
-            .await?;
+            ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
+                .await?;
             Ok(true)
         }
         .boxed()

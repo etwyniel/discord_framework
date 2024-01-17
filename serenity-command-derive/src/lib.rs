@@ -123,11 +123,8 @@ fn analyze_field(
     let attrs = get_attr_list(attrs).unwrap_or_default();
     let name = get_attr_value(&attrs, "name")?.unwrap_or_else(|| ident.to_string());
     let desc = get_attr_value(&attrs, "desc")?.unwrap_or_else(|| ident.to_string());
-    let find_opt =
-        quote!(opts.options.iter().find(|o| o.name == #name).and_then(|o| o.resolved.as_ref()));
-    let opt_value = quote!(
-        serenity::model::application::interaction::application_command::CommandDataOptionValue
-    );
+    let find_opt = quote!(opts.options.iter().find(|o| o.name == #name).map(|o| &o.value));
+    let opt_value = quote!(serenity::model::application::CommandDataOptionValue);
     let mut required = true;
     let autocomplete = get_attr_value(&attrs, "autocomplete")?.is_some();
     if let Type::Path(path) = ty {
@@ -154,31 +151,31 @@ fn analyze_field(
             let (matcher, kind) = match parts_str {
                 "String" | "std::str::String" => (
                     quote!(#opt_value::String(v)),
-                    quote!(serenity::model::application::command::CommandOptionType::String),
+                    quote!(serenity::model::application::CommandOptionType::String),
                 ),
                 "i64" | "u64" | "usize" => (
                     quote!(#opt_value::Integer(v)),
-                    quote!(serenity::model::application::command::CommandOptionType::Integer),
+                    quote!(serenity::model::application::CommandOptionType::Integer),
                 ),
                 "f64" => (
                     quote!(#opt_value::Number(v)),
-                    quote!(serenity::model::application::command::CommandOptionType::Number),
+                    quote!(serenity::model::application::CommandOptionType::Number),
                 ),
                 "bool" => (
                     quote!(#opt_value::Boolean(v)),
-                    quote!(serenity::model::application::command::CommandOptionType::Boolean),
+                    quote!(serenity::model::application::CommandOptionType::Boolean),
                 ),
                 "Role" | "serenity::model::guild::Role" => (
                     quote!(#opt_value::Role(v)),
-                    quote!(serenity::model::application::command::CommandOptionType::Role),
+                    quote!(serenity::model::application::CommandOptionType::Role),
                 ),
                 "User" | "serenity::model::user::User" => (
-                    quote!(#opt_value::User(v, _)),
-                    quote!(serenity::model::application::command::CommandOptionType::User),
+                    quote!(#opt_value::User(v)),
+                    quote!(serenity::model::application::CommandOptionType::User),
                 ),
                 "UserId" | "serenity::model::user::UserId" => (
-                    quote!(#opt_value::User(serenity::model::user::User{id: v, ..}, _)),
-                    quote!(serenity::model::application::command::CommandOptionType::User),
+                    quote!(#opt_value::User(v)),
+                    quote!(serenity::model::application::CommandOptionType::User),
                 ),
                 other => {
                     return Err(syn::Error::new(
@@ -226,15 +223,13 @@ impl CommandOption {
         let kind = &self.kind;
         let required = self.required;
         let autocomplete = self.autocomplete;
-        quote!(.create_option(|opt|{
-            opt.name(#name)
-                .description(#desc)
-                .kind(#kind)
+        quote!(builder = builder.add_option({
+            let mut opt = serenity::builder::CreateCommandOption::new(#kind, #name, #desc)
                 .required(#required)
                 .set_autocomplete(#autocomplete);
-            (&extras)(#name, opt);
+            opt = (&extras)(#name, opt);
             opt
-        }))
+        });)
     }
 }
 
@@ -268,10 +263,11 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let message = get_attr_value(&attrs, "message")?.is_some();
     let (constructor, builders, set_desc, set_type) = if message {
         let constructor = analyze_message_command_fields(&ident, s.fields)?;
-        let builder = quote!(.kind(serenity::model::application::command::CommandType::Message));
+        let builder =
+            quote!(builder = builder.kind(serenity::model::application::CommandType::Message););
         let set_type = quote!(
-            const TYPE: serenity::model::application::command::CommandType =
-                serenity::model::application::command::CommandType::Message;
+            const TYPE: serenity::model::application::CommandType =
+                serenity::model::application::CommandType::Message;
         );
         (constructor, vec![builder], quote!(), set_type)
     } else {
@@ -301,11 +297,11 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         let constructor = quote!(#ident {
             #(#field_names: #getters),*
         });
-        let set_desc = quote!(builder.description(#desc););
+        let set_desc = quote!(builder = builder.description(#desc););
         (constructor, builders, set_desc, quote!())
     };
     let runner_ident = Ident::new(&format!("__{}_runner", &ident), Span::call_site());
-    let app_command = quote!(serenity::model::application::interaction::application_command);
+    let app_command = quote!(serenity::model::application);
     let data_ident = quote!(<#ident as serenity_command::BotCommand>::Data);
     Ok(quote!(
             impl<'a> From<&'a #app_command::CommandData> for #ident {
@@ -323,7 +319,7 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     &self,
                     data: &#data_ident,
                     ctx: &serenity::prelude::Context,
-                    interaction: &#app_command::ApplicationCommandInteraction,
+                    interaction: &#app_command::CommandInteraction,
                     ) -> anyhow::Result<serenity_command::CommandResponse> {
                     #ident::from(&interaction.data).run(data, ctx, interaction).await
                 }
@@ -332,11 +328,12 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     (<#ident as serenity_command::CommandBuilder>::NAME, <#ident as serenity_command::CommandBuilder>::TYPE)
                 }
 
-                fn register<'a>(&self, builder: &'a mut serenity::builder::CreateApplicationCommand) -> &'a mut serenity::builder::CreateApplicationCommand {
+                fn register<'a>(&self) -> serenity::builder::CreateCommand {
                     use serenity_command::CommandBuilder;
-                    #ident::create_extras(builder, <#ident as serenity_command::BotCommand>::setup_options);
+                    let mut builder = serenity::builder::CreateCommand::new(<#ident as serenity_command::CommandBuilder>::NAME);
+                    builder = #ident::create_extras(builder, <#ident as serenity_command::BotCommand>::setup_options);
                     if !#ident::PERMISSIONS.is_empty() {
-                        builder.default_member_permissions(#ident::PERMISSIONS);
+                        builder = builder.default_member_permissions(#ident::PERMISSIONS);
                     }
                     builder
                 }
@@ -347,19 +344,20 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             }
 
         impl<'a> serenity_command::CommandBuilder<'a> for #ident {
-        fn create_extras<E: Fn(&'static str, &mut serenity::builder::CreateApplicationCommandOption)>(
-            builder: &mut serenity::builder::CreateApplicationCommand,
+        fn create_extras<E: Fn(&'static str, serenity::builder::CreateCommandOption) -> serenity::builder::CreateCommandOption>(
+            mut builder: serenity::builder::CreateCommand,
             extras: E
-        ) -> &mut serenity::builder::CreateApplicationCommand {
+        ) -> serenity::builder::CreateCommand {
             #set_desc
-            builder.name(#name)
+            builder = builder.name(#name);
             #(#builders)*
+            builder
         }
 
-        fn create(builder: &mut serenity::builder::CreateApplicationCommand)
-            -> &mut serenity::builder::CreateApplicationCommand
+        fn create(builder: serenity::builder::CreateCommand)
+            -> serenity::builder::CreateCommand
         {
-            let extras = |_: &'static str, _: &mut serenity::builder::CreateApplicationCommandOption| {};
+            let extras = |_: &'static str, opt: serenity::builder::CreateCommandOption| {opt};
             Self::create_extras(builder, extras)
         }
 

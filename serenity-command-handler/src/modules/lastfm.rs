@@ -13,13 +13,13 @@ use rspotify::ClientError;
 use rusqlite::params;
 use serde::Deserialize;
 use serenity::async_trait;
-use serenity::builder::CreateEmbed;
+use serenity::builder::{
+    CreateAttachment, CreateAutocompleteResponse, CreateEmbed, CreateInteractionResponse,
+    CreateInteractionResponseFollowup, EditInteractionResponse,
+};
 use serenity::json::JsonMap;
-use serenity::model::prelude::autocomplete::AutocompleteInteraction;
-use serenity::model::prelude::command::CommandType;
-use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
-use serenity::model::prelude::interaction::InteractionResponseType;
-use serenity::model::prelude::AttachmentType;
+use serenity::model::prelude::CommandInteraction;
+use serenity::model::prelude::CommandType;
 use serenity::prelude::{Context, Mutex};
 use serenity_command::{BotCommand, CommandKey, CommandResponse};
 
@@ -255,16 +255,20 @@ impl BotCommand for GetAotys {
         self,
         handler: &Handler,
         ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        opts.create_interaction_response(&ctx.http, |r| {
-            r.kind(InteractionResponseType::DeferredChannelMessageWithSource)
-        })
+        opts.create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(Default::default()),
+        )
         .await?;
         if let Err(e) = self.get_aotys(handler, ctx, opts).await {
             eprintln!("get aotys failed: {:?}", &e);
-            opts.create_followup_message(&ctx.http, |resp| resp.content(e.to_string()))
-                .await?;
+            opts.create_followup(
+                &ctx.http,
+                CreateInteractionResponseFollowup::new().content(e.to_string()),
+            )
+            .await?;
         }
         Ok(CommandResponse::None)
     }
@@ -275,7 +279,7 @@ impl GetAotys {
         self,
         handler: &Handler,
         ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<()> {
         let lastfm: Arc<Lastfm> = handler.module_arc()?;
         let spotify: Arc<Spotify> = handler.module_arc()?;
@@ -309,12 +313,13 @@ impl GetAotys {
             .await?;
         let http = &ctx.http;
         if aotys.is_empty() {
-            opts.create_followup_message(http, |msg| {
-                msg.content(format!(
+            opts.create_followup(
+                http,
+                CreateInteractionResponseFollowup::new().content(format!(
                     "No {} albums found for user {}",
                     &year_fmt, &self.username
-                ))
-            })
+                )),
+            )
             .await?;
             return Ok(());
         }
@@ -334,12 +339,15 @@ impl GetAotys {
                 content.push('\n');
                 content.push_str(&line);
             });
-        opts.create_followup_message(http, |msg| {
-            msg.content(content).add_file(AttachmentType::Bytes {
-                data: Cow::Owned(image),
-                filename: format!("{}_aoty_{}.png", &self.username, &year_fmt),
-            })
-        })
+        opts.create_followup(
+            http,
+            CreateInteractionResponseFollowup::new()
+                .content(content)
+                .add_file(CreateAttachment::bytes(
+                    Cow::Owned(image),
+                    format!("{}_aoty_{}.png", &self.username, &year_fmt),
+                )),
+        )
         .await?;
         Ok(())
     }
@@ -421,11 +429,12 @@ impl BotCommand for GetSotys {
         self,
         handler: &Handler,
         ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        opts.create_interaction_response(&ctx.http, |r| {
-            r.kind(InteractionResponseType::DeferredChannelMessageWithSource)
-        })
+        opts.create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(Default::default()),
+        )
         .await?;
         self.get_soty(handler, ctx, opts).await?;
         Ok(CommandResponse::None)
@@ -437,7 +446,7 @@ impl GetSotys {
         self,
         handler: &Handler,
         ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<()> {
         let year = self
             .year
@@ -463,16 +472,11 @@ impl GetSotys {
                 )
             })
             .join("\n");
-        let mut embed = CreateEmbed::default();
-        embed.description(content);
-        embed.title(format!("Top songs of {year} for {}", &self.username));
-        opts.edit_original_interaction_response(&ctx.http, |resp| {
-            resp.embed(|e| {
-                *e = embed;
-                e
-            })
-        })
-        .await?;
+        let embed = CreateEmbed::default()
+            .description(content)
+            .title(format!("Top songs of {year} for {}", &self.username));
+        opts.edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await?;
         Ok(())
     }
 }
@@ -1007,7 +1011,7 @@ impl BotCommand for FixReleaseYear {
         self,
         handler: &Handler,
         _ctx: &Context,
-        _opts: &ApplicationCommandInteraction,
+        _opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let db = handler.db.lock().await;
         let current_value = match get_release_year_db(&db, &self.artist, &self.album) {
@@ -1040,7 +1044,7 @@ fn complete_album<'a>(
     handler: &'a Handler,
     ctx: &'a Context,
     key: CommandKey<'a>,
-    ac: &'a AutocompleteInteraction,
+    ac: &'a CommandInteraction,
 ) -> BoxFuture<'a, anyhow::Result<bool>> {
     async move {
         if key != ("fix_release_year", CommandType::ChatInput) {
@@ -1077,13 +1081,13 @@ fn complete_album<'a>(
             values
         };
 
-        ac.create_autocomplete_response(&ctx.http, |r| {
-            values.into_iter().for_each(|val| {
-                r.add_string_choice(&val, &val);
+        let complete = values
+            .iter()
+            .fold(CreateAutocompleteResponse::new(), |complete, val| {
+                complete.add_string_choice(val, val)
             });
-            r
-        })
-        .await?;
+        ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(complete))
+            .await?;
         Ok(true)
     }
     .boxed()

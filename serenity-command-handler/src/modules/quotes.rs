@@ -15,18 +15,16 @@ use regex::Regex;
 use rusqlite::{params, Error::SqliteFailure, ErrorCode};
 use serenity::{
     async_trait,
-    builder::{CreateApplicationCommandOption, CreateEmbed},
+    builder::{
+        CreateAutocompleteResponse, CreateCommandOption, CreateEmbed, CreateEmbedAuthor,
+        CreateEmbedFooter, CreateInteractionResponse, GetMessages,
+    },
     model::{
+        self,
+        application::{CommandInteraction, CommandType},
         channel::Message,
         id::MessageId,
-        prelude::{
-            command::CommandType,
-            interaction::{
-                application_command::ApplicationCommandInteraction,
-                autocomplete::AutocompleteInteraction,
-            },
-            ChannelId, GuildId, ReactionType, UserId,
-        },
+        prelude::{ChannelId, GuildId, ReactionType, UserId},
     },
     prelude::Context,
 };
@@ -62,13 +60,13 @@ pub async fn message_to_quote_contents(
                 .await?
                 .guild()
                 .unwrap()
-                .messages(http, |get| get.before(message.id).limit(num))
+                .messages(http, GetMessages::new().before(message.id).limit(num as u8))
                 .await?;
             messages.extend(
                 before
                     .iter()
                     .rev()
-                    .map(|msg| (msg.content.clone(), msg.author.id.0)),
+                    .map(|msg| (msg.content.clone(), msg.author.id.get())),
             );
         }
     }
@@ -77,10 +75,10 @@ pub async fn message_to_quote_contents(
             message
                 .referenced_message
                 .as_ref()
-                .map(|msg| (msg.content.clone(), msg.author.id.0)),
+                .map(|msg| (msg.content.clone(), msg.author.id.get())),
         );
     }
-    messages.push((message.content.clone(), message.author.id.0));
+    messages.push((message.content.clone(), message.author.id.get()));
     let mut contents = String::new();
     let mut prev_author = messages.first().unwrap().1;
     for (msg, author) in messages {
@@ -123,7 +121,7 @@ pub async fn fetch_quote(
                     quote_number,
                     guild_id: row.get(0)?,
                     channel_id: row.get(1)?,
-                    message_id: MessageId(row.get(2)?),
+                    message_id: MessageId::new(row.get(2)?),
                     ts: DateTime::<Utc>::from_utc(dt, Utc),
                     author_id: row.get(4)?,
                     author_name: row.get(5)?,
@@ -155,9 +153,9 @@ pub async fn add_quote(
             |row| row.get(0),
         )
         .unwrap_or(0);
-    let channel_id = message.channel_id.0;
+    let channel_id = message.channel_id.get();
     let ts = message.timestamp;
-    let author_id = message.author.id.0;
+    let author_id = message.author.id.get();
     let author_name = &message.author.name;
     let image = message
         .attachments
@@ -172,7 +170,7 @@ pub async fn add_quote(
         params![
             guild_id,
             channel_id,
-            message.id.0,
+            message.id.get(),
             ts.unix_timestamp(),
             last_quote + 1,
             author_id,
@@ -320,18 +318,20 @@ impl BotCommand for GetQuote {
         self,
         handler: &Handler,
         ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let guild_id = opts
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .0;
+            .get();
         self.get_quote(handler, ctx, guild_id).await
     }
 
-    fn setup_options(opt_name: &'static str, opt: &mut CreateApplicationCommandOption) {
+    fn setup_options(opt_name: &'static str, opt: CreateCommandOption) -> CreateCommandOption {
         if opt_name == "number" {
-            opt.min_int_value(1);
+            opt.min_int_value(1)
+        } else {
+            opt
         }
     }
 }
@@ -346,14 +346,14 @@ impl GetQuote {
         let quote = if let Some(quote_number) = self.number {
             fetch_quote(handler, guild_id, quote_number as u64).await?
         } else {
-            get_random_quote(handler, guild_id, self.user.map(|u| u.0)).await?
+            get_random_quote(handler, guild_id, self.user.map(|u| u.get())).await?
         }
         .ok_or_else(|| anyhow!("No such quote"))?;
         let message_url = format!(
             "https://discord.com/channels/{}/{}/{}",
             quote.guild_id, quote.channel_id, quote.message_id
         );
-        let channel = ChannelId(quote.channel_id)
+        let channel = ChannelId::new(quote.channel_id)
             .to_channel(&ctx.http)
             .await?
             .guild();
@@ -369,7 +369,7 @@ impl GetQuote {
         let author_avatar = if hide_author {
             None
         } else {
-            UserId(quote.author_id)
+            UserId::new(quote.author_id)
                 .to_user(&ctx.http)
                 .await?
                 .avatar_url()
@@ -385,20 +385,20 @@ impl GetQuote {
             let hide_author_re = Regex::new("(<@\\d+>)").unwrap();
             contents = hide_author_re.replace_all(&contents, "||$1||").to_string();
         }
-        let mut create = CreateEmbed::default();
-        create
-            .author(|a| {
-                author_avatar.map(|av| a.icon_url(av));
-                a.name(format!("#{}{}", quote.quote_number, quote_header))
-            })
+        let mut create = CreateEmbed::default()
+            .author(
+                CreateEmbedAuthor::new(format!("#{}{}", quote.quote_number, quote_header))
+                    .icon_url(author_avatar.unwrap_or_default()),
+            )
             .description(&contents)
             .url(message_url)
-            .footer(|f| f.text(format!("in #{channel_name}")))
-            .timestamp(quote.ts.format("%+").to_string());
+            .footer(CreateEmbedFooter::new(format!("in #{channel_name}")))
+            .timestamp(model::Timestamp::parse(&quote.ts.format("%+").to_string()).unwrap());
+
         if let Some(image) = quote.image {
-            create.image(image);
+            create = create.image(image);
         }
-        Ok(CommandResponse::Embed(create))
+        Ok(CommandResponse::Embed(Box::new(create)))
     }
 }
 
@@ -413,14 +413,17 @@ impl BotCommand for SaveQuote {
         self,
         handler: &Handler,
         ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let guild_id = opts
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .0;
+            .get();
         let quote_number = add_quote(handler, ctx, guild_id, &self.0).await?;
-        let link = self.0.id.link(self.0.channel_id, Some(GuildId(guild_id)));
+        let link = self
+            .0
+            .id
+            .link(self.0.channel_id, Some(GuildId::new(guild_id)));
         let resp_text = match quote_number {
             Some(n) => format!("Quote saved as #{n}: {link}"),
             None => "Quote already added".to_string(),
@@ -444,14 +447,14 @@ impl BotCommand for FakeQuote {
         self,
         handler: &Handler,
         _ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let (chain, quotes) = quotes_markov_chain(
             handler,
             opts.guild_id
                 .ok_or_else(|| anyhow!("must be run in a guild"))?
-                .0,
-            self.user.map(|u| u.0),
+                .get(),
+            self.user.map(|u| u.get()),
             self.order,
         )
         .await?;
@@ -473,17 +476,19 @@ impl BotCommand for FakeQuote {
         }
         if resp.is_empty() {
             resp = "Failed to generate quote".to_string();
-        } else if let Some(UserId(id)) = self.user {
+        } else if let Some(id) = self.user.map(UserId::get) {
             write!(&mut resp, "\n - <@{id}>").unwrap();
         }
         Ok(CommandResponse::Public(resp))
     }
 
-    fn setup_options(opt_name: &'static str, opt: &mut CreateApplicationCommandOption) {
+    fn setup_options(opt_name: &'static str, opt: CreateCommandOption) -> CreateCommandOption {
         if opt_name == "order" {
-            opt.min_int_value(1).max_int_value(4).description(
-                "Markov chain order. Higher = closer to real quotes but more coherent",
-            );
+            opt.min_int_value(1)
+                .max_int_value(4)
+                .description("Markov chain order. Higher = closer to real quotes but more coherent")
+        } else {
+            opt
         }
     }
 }
@@ -495,7 +500,7 @@ impl Quotes {
         handler: &'a Handler,
         ctx: &'a Context,
         key: CommandKey<'a>,
-        ac: &'a AutocompleteInteraction,
+        ac: &'a CommandInteraction,
     ) -> BoxFuture<'a, anyhow::Result<bool>> {
         async move {
             if key != ("quote", CommandType::ChatInput) {
@@ -504,24 +509,22 @@ impl Quotes {
             let guild_id = ac
                 .guild_id
                 .ok_or_else(|| anyhow!("must be run in a guild"))?
-                .0;
+                .get();
             let options = &ac.data.options;
             let val = get_str_opt_ac(options, "number");
             let Some(v) = val else {
                 return Ok(true);
             };
             let quotes = list_quotes(handler, guild_id, v).await?;
-            ac.create_autocomplete_response(&ctx.http, |r| {
-                quotes
-                    .into_iter()
-                    .filter(|(_, quote)| !quote.is_empty())
-                    .map(|(num, quote)| (num, quote.chars().take(100).collect::<String>()))
-                    .for_each(|(num, q)| {
-                        r.add_int_choice(q, num as i64);
-                    });
-                r
-            })
-            .await?;
+            let resp = quotes
+                .into_iter()
+                .filter(|(_, quote)| !quote.is_empty())
+                .map(|(num, quote)| (num, quote.chars().take(100).collect::<String>()))
+                .fold(CreateAutocompleteResponse::new(), |resp, (num, q)| {
+                    resp.add_int_choice(q, num as i64)
+                });
+            ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
+                .await?;
             Ok(true)
         }
         .boxed()

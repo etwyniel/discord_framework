@@ -8,12 +8,8 @@ use serenity::{
     async_trait,
     futures::future::BoxFuture,
     http::Http,
-    model::application::interaction::autocomplete::AutocompleteInteraction,
-    model::prelude::interaction::{
-        application_command::{
-            ApplicationCommandInteraction, CommandDataOption, CommandDataOptionValue,
-        },
-        Interaction,
+    model::application::{
+        CommandDataOption, CommandDataOptionValue, CommandInteraction, Interaction,
     },
     prelude::{Context, Mutex, RwLock, TypeMap, TypeMapKey},
 };
@@ -35,7 +31,7 @@ pub type CommandStore = serenity_command::CommandStore<'static, Handler>;
 type SpecialCommand = for<'a> fn(
     &'a Handler,
     &'a Context,
-    &'a ApplicationCommandInteraction,
+    &'a CommandInteraction,
 ) -> BoxFuture<'a, anyhow::Result<CommandResponse>>;
 
 // Format command options for debug output
@@ -47,10 +43,9 @@ fn format_options(opts: &[CommandDataOption]) -> String {
         }
         out.push_str(&opt.name);
         out.push_str(": ");
-        match &opt.resolved {
-            None => out.push_str("None"),
-            Some(CommandDataOptionValue::String(s)) => write!(&mut out, "{s:?}").unwrap(),
-            Some(val) => write!(&mut out, "{val:?}").unwrap(),
+        match &opt.value {
+            CommandDataOptionValue::String(s) => write!(&mut out, "{s:?}").unwrap(),
+            val => write!(&mut out, "{val:?}").unwrap(),
         }
     }
     out
@@ -60,7 +55,7 @@ pub type CompletionHandler = for<'a> fn(
     handler: &'a Handler,
     ctx: &'a Context,
     key: CommandKey<'a>,
-    command: &'a AutocompleteInteraction,
+    command: &'a CommandInteraction,
 ) -> BoxFuture<'a, anyhow::Result<bool>>;
 
 pub type CompletionStore = Vec<CompletionHandler>;
@@ -97,7 +92,7 @@ pub trait InteractionExt {
     fn guild_id(&self) -> anyhow::Result<GuildId>;
 }
 
-impl InteractionExt for ApplicationCommandInteraction {
+impl InteractionExt for CommandInteraction {
     fn guild_id(&self) -> anyhow::Result<GuildId> {
         self.guild_id
             .ok_or_else(|| anyhow!("Must be run in a server"))
@@ -139,7 +134,7 @@ impl Handler {
     async fn process_command(
         &self,
         ctx: &Context,
-        cmd: &ApplicationCommandInteraction,
+        cmd: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let name = cmd.data.name.as_str();
         if let Some(special) = self.special_commands.get(name) {
@@ -172,7 +167,7 @@ impl Handler {
             // if let Some(handler) = self.completion_handlers.get(&key) {
             //     _ = handler(self, key, ac).await;
             // }
-        } else if let Interaction::ApplicationCommand(command) = interaction {
+        } else if let Interaction::Command(command) = interaction {
             // log command
             let guild_name = if let Some(guild) = command.guild_id {
                 guild

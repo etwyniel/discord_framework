@@ -3,10 +3,7 @@ use itertools::Itertools;
 use rusqlite::{types::ValueRef, Connection};
 use serenity::{
     async_trait,
-    model::{
-        prelude::interaction::application_command::ApplicationCommandInteraction, prelude::UserId,
-        Permissions,
-    },
+    model::{prelude::CommandInteraction, prelude::UserId, Permissions},
     prelude::Context,
 };
 use serenity_command::{BotCommand, CommandResponse};
@@ -39,9 +36,11 @@ impl Query {
             String::new()
         };
         // check user is amin
-        match db.query_row("SELECT id FROM admin WHERE id = ?1", [requester.0], |row| {
-            row.get::<_, u64>(0)
-        }) {
+        match db.query_row(
+            "SELECT id FROM admin WHERE id = ?1",
+            [requester.get()],
+            |row| row.get::<_, u64>(0),
+        ) {
             Ok(_) => (),
             Err(rusqlite::Error::QueryReturnedNoRows) => bail!("Admin-only command"),
             err @ Err(_) => return err.context(qry_context).map(|_| CommandResponse::None),
@@ -91,7 +90,7 @@ impl BotCommand for Query {
         self,
         handler: &Handler,
         _ctx: &Context,
-        cmd: &ApplicationCommandInteraction,
+        cmd: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let db = handler.db.lock().await;
         self.query(&db.conn, cmd.user.id, true)

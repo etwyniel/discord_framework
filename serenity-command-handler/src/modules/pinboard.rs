@@ -1,15 +1,13 @@
-use std::borrow::Cow;
-
 use anyhow::{anyhow, bail, Context as _};
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
-use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
+use serenity::builder::{CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter, ExecuteWebhook};
 use serenity::model::prelude::Member;
 use serenity::model::user::User;
 use serenity::{
     async_trait,
     model::{
-        prelude::{ChannelId, Embed, GuildId, Message},
+        prelude::{ChannelId, CommandInteraction, Embed, GuildId, Message},
         Permissions,
     },
     prelude::Context,
@@ -21,39 +19,51 @@ use crate::prelude::*;
 
 const MAX_EMBEDS: usize = 10;
 
-pub fn copy_embed(em: &Embed) -> serenity::json::Value {
-    Embed::fake(|out| {
-        em.title.as_ref().map(|title| out.title(title));
-        em.url.as_ref().map(|url| out.url(url));
-        em.author.as_ref().map(|author| {
-            out.author(|at| {
-                author.url.as_ref().map(|url| at.url(url));
-                author.icon_url.as_ref().map(|url| at.icon_url(url));
-                at.name(&author.name)
-            })
-        });
-        em.colour.as_ref().map(|colour| out.colour(*colour));
-        em.description
-            .as_ref()
-            .map(|description| out.description(description));
-        em.fields.iter().for_each(|f| {
-            out.field(&f.name, &f.value, f.inline);
-        });
-        em.footer.as_ref().map(|footer| {
-            out.footer(|f| {
-                footer.icon_url.as_ref().map(|url| f.icon_url(url));
-                f.text(&footer.text)
-            })
-        });
-        em.image.as_ref().map(|image| out.image(&image.url));
-        em.thumbnail
-            .as_ref()
-            .map(|thumbnail| out.thumbnail(&thumbnail.url));
-        em.timestamp
-            .as_deref()
-            .map(|timestamp| out.timestamp(timestamp));
-        out
-    })
+pub fn copy_embed(em: &Embed) -> CreateEmbed {
+    let mut out = CreateEmbed::new();
+    if let Some(title) = &em.title {
+        out = out.title(title);
+    }
+    if let Some(url) = &em.url {
+        out = out.url(url);
+    }
+    if let Some(author) = &em.author {
+        let mut at = CreateEmbedAuthor::new(&author.name);
+        if let Some(url) = &author.url {
+            at = at.url(url);
+        }
+        if let Some(icon) = &author.icon_url {
+            at = at.icon_url(icon);
+        }
+        out = out.author(at);
+    }
+    if let Some(color) = em.colour {
+        out = out.color(color);
+    }
+    if let Some(desc) = &em.description {
+        out = out.description(desc);
+    }
+    out = em
+        .fields
+        .iter()
+        .fold(out, |out, f| out.field(&f.name, &f.value, f.inline));
+    if let Some(footer) = &em.footer {
+        let mut f = CreateEmbedFooter::new(&footer.text);
+        if let Some(icon) = &footer.icon_url {
+            f = f.icon_url(icon);
+        }
+        out = out.footer(f);
+    }
+    if let Some(img) = &em.image {
+        out = out.image(&img.url);
+    }
+    if let Some(thumbnail) = &em.thumbnail {
+        out = out.thumbnail(&thumbnail.url);
+    }
+    if let Some(ts) = em.timestamp {
+        out = out.timestamp(ts);
+    }
+    out
 }
 
 #[derive(Debug)]
@@ -97,12 +107,12 @@ impl BotCommand for SetPinboardWebhook {
         self,
         handler: &Handler,
         _ctx: &Context,
-        opts: &ApplicationCommandInteraction,
+        opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let guild_id = opts
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .0;
+            .get();
         handler.db.lock().await.set_guild_field(
             guild_id,
             "pinboard_webhook",
@@ -130,15 +140,15 @@ async fn load_allowed_channels(
         .conn
         .prepare("SELECT channel_id FROM pinboard_allowed_channels WHERE guild_id = ?1")?;
     let channels: Vec<_> = stmt
-        .query([guild_id.0])?
-        .map(|row| Ok(ChannelId(row.get(0)?)))
+        .query([guild_id.get()])?
+        .map(|row| Ok(ChannelId::new(row.get(0)?)))
         .collect()?;
     Ok(channels)
 }
 
 fn user_avatar(user: &User, member: Option<&Member>) -> Option<String> {
     member
-        .and_then(|member| member.avatar.clone())
+        .and_then(|member| member.avatar_url().clone())
         .filter(|av| av.starts_with("http"))
         .or_else(|| user.avatar_url())
         .filter(|av| av.starts_with("http"))
@@ -158,7 +168,7 @@ impl Pinboard {
             .db
             .lock()
             .await
-            .get_guild_field(guild_id.0, "pinboard_webhook")
+            .get_guild_field(guild_id.get(), "pinboard_webhook")
             .map_err(|_| anyhow!("No webhook configured"))?;
         let allowed_channels = load_allowed_channels(handler, guild_id).await?;
         if !(allowed_channels.is_empty() || allowed_channels.contains(&channel)) {
@@ -187,7 +197,7 @@ impl Pinboard {
         let name = member
             .as_ref()
             .map(|m| m.display_name())
-            .unwrap_or(Cow::Borrowed(&author.name));
+            .unwrap_or(&author.name);
         let avatar = user_avatar(author, member.as_ref());
         let channel_name = channel
             .to_channel(&ctx)
@@ -220,7 +230,7 @@ impl Pinboard {
             let name = member
                 .as_ref()
                 .map(|m| m.display_name())
-                .unwrap_or(Cow::Borrowed(&author.name));
+                .unwrap_or(&author.name);
             let avatar = user_avatar(author, member.as_ref());
             // Filter attachments to find images
             let image = reply
@@ -230,43 +240,51 @@ impl Pinboard {
                 .map(|at| at.url.as_str())
                 .next();
             if !reply.content.is_empty() || image.is_some() {
-                embeds.push(Embed::fake(|val| {
-                    image.map(|url| val.image(url));
-                    val.description(&reply.content)
-                        .timestamp(reply.timestamp)
-                        .author(|author| {
-                            avatar.map(|av| author.icon_url(av));
-                            author.name(format!("Replying to {name}"))
+                embeds.push({
+                    let mut em = CreateEmbed::new()
+                        .description(&reply.content)
+                        .author({
+                            let mut at = CreateEmbedAuthor::new(format!("Replying to {name}"));
+                            if let Some(icon) = avatar.as_ref() {
+                                at = at.icon_url(icon);
+                            }
+                            at
                         })
-                        .url(reply.link())
-                }))
+                        .url(reply.link());
+                    if let Some(img) = image {
+                        em = em.image(img);
+                    }
+                    em
+                })
             }
         }
         // put first image with the embed for message text
         let image = images.next();
         if !last_pin.content.is_empty() || image.is_some() {
-            embeds.push(Embed::fake(|val| {
-                image.map(|url| val.image(url));
-                val.description(format!(
-                    "{}\n\n[(Source)]({})",
-                    last_pin.content,
-                    last_pin.link()
-                ))
-                .footer(|footer| footer.text(&footer_str))
-                .timestamp(last_pin.timestamp)
-                .author(|author| {
-                    avatar.as_ref().map(|av| author.icon_url(av));
-                    author.name(&name).url(last_pin.link())
-                })
-            }))
+            embeds.push({
+                let mut em = CreateEmbed::new()
+                    .description(&last_pin.content)
+                    .footer(CreateEmbedFooter::new(&footer_str))
+                    .timestamp(last_pin.timestamp)
+                    .author({
+                        let mut at = CreateEmbedAuthor::new(name).url(last_pin.link());
+                        if let Some(url) = avatar.as_ref() {
+                            at = at.icon_url(url);
+                        }
+                        at
+                    });
+                if let Some(url) = image {
+                    em = em.image(url);
+                }
+                em
+            })
         }
         // create embeds for remaining images
         embeds.extend(images.map(|img| {
-            Embed::fake(|out| {
-                out.image(img)
-                    .footer(|f| f.text(&footer_str))
-                    .timestamp(last_pin.timestamp)
-            })
+            CreateEmbed::new()
+                .image(img)
+                .footer(CreateEmbedFooter::new(&footer_str))
+                .timestamp(last_pin.timestamp)
         }));
         embeds.extend(
             last_pin
@@ -280,10 +298,12 @@ impl Pinboard {
                 .get_webhook_from_url(&pinboard_webhook)
                 .await
                 .context("error getting webhook")?
-                .execute(&ctx.http, true, |message| {
-                    message.embeds(embeds);
-                    avatar.as_ref().map(|av| message.avatar_url(av));
-                    message.username(&name)
+                .execute(&ctx.http, true, {
+                    let mut wh = ExecuteWebhook::new().embeds(embeds).username(name);
+                    if let Some(url) = avatar.as_ref() {
+                        wh = wh.avatar_url(url);
+                    }
+                    wh
                 })
                 .await
                 .context("error calling pinboard webhook")?;
@@ -309,7 +329,7 @@ impl BotCommand for RegisterChannel {
         self,
         data: &Handler,
         _: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let Some(guild_id) = interaction.guild_id else {
             bail!("Must be run in a guild")
@@ -317,10 +337,10 @@ impl BotCommand for RegisterChannel {
         let db = data.db.lock().await;
         db.conn.execute(
             "INSERT INTO pinboard_allowed_channels (guild_id, channel_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
-            [guild_id.0, interaction.channel_id.0])?;
+            [guild_id.get(), interaction.channel_id.get()])?;
         Ok(CommandResponse::Private(format!(
             "Registered <#{}> to pinboard",
-            interaction.channel_id.0
+            interaction.channel_id.get()
         )))
     }
 }
@@ -338,7 +358,7 @@ impl BotCommand for UnregisterChannel {
         self,
         data: &Handler,
         _: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let Some(guild_id) = interaction.guild_id else {
             bail!("Must be run in a guild")
@@ -346,11 +366,11 @@ impl BotCommand for UnregisterChannel {
         let db = data.db.lock().await;
         db.conn.execute(
             "DELETE FROM pinboard_allowed_channels WHERE guild_id = ?1 AND channel_id = ?2",
-            [guild_id.0, interaction.channel_id.0],
+            [guild_id.get(), interaction.channel_id.get()],
         )?;
         Ok(CommandResponse::Private(format!(
             "Unregistered <#{}> from pinboard",
-            interaction.channel_id.0
+            interaction.channel_id.get()
         )))
     }
 }
@@ -368,7 +388,7 @@ impl BotCommand for ListChannels {
         self,
         handler: &Handler,
         _: &Context,
-        interaction: &ApplicationCommandInteraction,
+        interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let Some(guild_id) = interaction.guild_id else {
             bail!("Must be run in a guild")
@@ -381,7 +401,7 @@ impl BotCommand for ListChannels {
                 "Pins from the following channels will be sent to pinboard:\n{}",
                 channels
                     .iter()
-                    .map(|ChannelId(c)| format!("<#{c}>"))
+                    .map(|c| format!("<#{}>", c.get()))
                     .join("\n")
             ),
         };
