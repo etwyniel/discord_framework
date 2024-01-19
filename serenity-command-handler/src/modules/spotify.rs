@@ -57,7 +57,7 @@ async fn resolve_redirect(url: &str) -> anyhow::Result<String> {
 
 impl<C: BaseClient> Spotify<C> {
     async fn get_album_from_id(&self, id: &str) -> anyhow::Result<Album> {
-        let album = self.client.album(AlbumId::from_id(id)?).await?;
+        let album = self.client.album(AlbumId::from_id(id)?, None).await?;
         let name = album.name.clone();
         let artist = album
             .artists
@@ -107,7 +107,7 @@ impl<C: BaseClient> Spotify<C> {
     }
 
     pub async fn get_song_from_id(&self, id: &str) -> anyhow::Result<FullTrack> {
-        Ok(self.client.track(TrackId::from_id(id)?).await?)
+        Ok(self.client.track(TrackId::from_id(id)?, None).await?)
     }
 
     pub async fn get_song_from_url(&self, url: &str) -> anyhow::Result<FullTrack> {
