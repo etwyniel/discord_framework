@@ -39,7 +39,10 @@ impl Db {
 
     pub fn add_guild_field(&mut self, name: &str, def: &str) -> anyhow::Result<()> {
         self.conn
-            .execute(&"CREATE TABLE IF NOT EXISTS guild(id INTEGER PRIMARY KEY)", [])
+            .execute(
+                "CREATE TABLE IF NOT EXISTS guild(id INTEGER PRIMARY KEY)",
+                [],
+            )
             .map_err(anyhow::Error::from)?;
         let count: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('guild') WHERE name = ?1",

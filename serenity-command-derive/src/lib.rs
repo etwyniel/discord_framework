@@ -165,7 +165,7 @@ fn analyze_field(
                     quote!(#opt_value::Boolean(v)),
                     quote!(serenity::model::application::CommandOptionType::Boolean),
                 ),
-                "Role" | "serenity::model::guild::Role" => (
+                "RoleId" | "serenity::model::guild::RoleId" => (
                     quote!(#opt_value::Role(v)),
                     quote!(serenity::model::application::CommandOptionType::Role),
                 ),

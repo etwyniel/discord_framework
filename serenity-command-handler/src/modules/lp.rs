@@ -4,11 +4,13 @@ use std::ops::Add;
 
 use crate::{db::Db, CommandStore, HandlerBuilder, Module};
 use anyhow::bail;
+use anyhow::Context as _;
 use chrono::{prelude::*, Duration};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use regex::Regex;
 use serenity::all::AutoArchiveDuration;
+use serenity::all::RoleId;
 use serenity::async_trait;
 use serenity::builder::CreateAllowedMentions;
 use serenity::builder::CreateAutocompleteResponse;
@@ -22,6 +24,7 @@ use serenity::model::application::CommandType;
 use serenity::model::channel::ChannelType;
 use serenity::model::id::GuildId;
 use serenity::model::prelude::CommandInteraction;
+use serenity::model::Permissions;
 use serenity_command_derive::Command;
 
 use crate::album::Album;
@@ -53,13 +56,13 @@ pub struct Lp {
 }
 
 fn convert_lp_time(time: Option<&str>) -> Result<String, anyhow::Error> {
+    let mut lp_time = Utc::now().add(Duration::seconds(10));
     let time = match time {
-        Some("now") | None => return Ok("now".to_string()),
+        Some("now") | None => return Ok(format!("now (<t:{}:R>)", lp_time.timestamp())),
         Some(t) => t,
     };
     let xx_re = Regex::new("(?i)^(XX:?)?([0-5][0-9])$")?; // e.g. XX:15, xx15 or 15
     let plus_re = Regex::new(r"\+?(([0-5])?[0-9])m?")?; // e.g. +25
-    let mut lp_time = Utc::now();
     if let Some(cap) = xx_re.captures(time) {
         let min: i64 = cap.get(2).unwrap().as_str().parse()?;
         if !(0..60).contains(&min) {
@@ -113,19 +116,20 @@ async fn build_message_contents(
     let lp_name = lp_name
         .map(str::to_string)
         .unwrap_or_else(|| info.format_name());
+    let hyperlinked = if let Some(link) = &info.url {
+        format!("[**{lp_name}**]({link})")
+    } else {
+        lp_name
+    };
     let mut resp_content = format!(
-        "{} {} {}\n",
+        "{} {hyperlinked} {}\n",
         role_id // mention role if set
             .map(|id| format!("<@&{id}>"))
             .unwrap_or_else(|| "Listening party: ".to_string()),
-        lp_name,
         when
     );
     if let Some(genres) = info.format_genres() {
         _ = writeln!(&mut resp_content, "{}", &genres);
-    }
-    if let Some(link) = &info.url {
-        _ = writeln!(&mut resp_content, "{}", &link);
     }
     Ok(resp_content)
 }
@@ -259,6 +263,100 @@ impl BotCommand for Lp {
     }
 }
 
+#[derive(Command)]
+#[cmd(
+    name = "setcreatethreads",
+    desc = "set whether to create threads for listening parties"
+)]
+pub struct SetCreateThreads {
+    create_threads: bool,
+}
+
+#[async_trait]
+impl BotCommand for SetCreateThreads {
+    type Data = Handler;
+    const PERMISSIONS: Permissions = Permissions::MANAGE_THREADS;
+    async fn run(
+        self,
+        handler: &Handler,
+        _ctx: &Context,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let guild_id = command.guild_id()?.get();
+        let mut db = handler.db.lock().await;
+        db.set_guild_field(guild_id, "create_threads", self.create_threads)
+            .context("updating 'create_threads' guild field")?;
+        let resp = if self.create_threads {
+            "Will create threads when setting up listening parties"
+        } else {
+            "Will not create threads when setting up listening parties"
+        };
+        Ok(CommandResponse::Private(resp.to_string()))
+    }
+}
+
+#[derive(Command)]
+#[cmd(name = "setrole", desc = "set the role to ping for listening parties")]
+pub struct SetRole {
+    role: Option<RoleId>,
+}
+
+#[async_trait]
+impl BotCommand for SetRole {
+    type Data = Handler;
+    const PERMISSIONS: Permissions = Permissions::MANAGE_ROLES;
+    async fn run(
+        self,
+        handler: &Handler,
+        _ctx: &Context,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let guild_id = command.guild_id()?.get();
+        let role = self.role.as_ref().map(|r| r.get().to_string());
+        let mut db = handler.db.lock().await;
+        db.set_guild_field(guild_id, "role_id", &role)
+            .context("updating 'role_id' guild field")?;
+        let resp = if let Some(role_id) = role {
+            format!("Set listening party role to <@&{role_id}>.")
+        } else {
+            "Unset listening party role.".to_string()
+        };
+        Ok(CommandResponse::Private(resp))
+    }
+}
+
+#[derive(Command)]
+#[cmd(
+    name = "setwebhook",
+    desc = "set a webhook to use when creating listening parties"
+)]
+pub struct SetWebhook {
+    webhook: Option<String>,
+}
+
+#[async_trait]
+impl BotCommand for SetWebhook {
+    type Data = Handler;
+    const PERMISSIONS: Permissions = Permissions::MANAGE_WEBHOOKS;
+    async fn run(
+        self,
+        handler: &Handler,
+        _ctx: &Context,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let guild_id = command.guild_id()?.get();
+        let mut db = handler.db.lock().await;
+        db.set_guild_field(guild_id, "webhook", self.webhook.as_ref())
+            .context("updating 'webhook' guild field")?;
+        let resp = if self.webhook.is_some() {
+            "Listening parties will be created using a webhook."
+        } else {
+            "Listening parties will not be created using a webhook."
+        };
+        Ok(CommandResponse::Private(resp.to_string()))
+    }
+}
+
 pub struct ModLp;
 
 impl ModLp {
@@ -340,11 +438,15 @@ impl Module for ModLp {
     async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
         db.add_guild_field("create_threads", "BOOLEAN NOT NULL DEFAULT(false)")?;
         db.add_guild_field("webhook", "STRING")?;
+        db.add_guild_field("role_id", "STRING")?;
         Ok(())
     }
 
     fn register_commands(&self, store: &mut CommandStore, completions: &mut CompletionStore) {
         store.register::<Lp>();
+        store.register::<SetRole>();
+        store.register::<SetCreateThreads>();
+        store.register::<SetWebhook>();
         completions.push(ModLp::complete_lp);
     }
 }
