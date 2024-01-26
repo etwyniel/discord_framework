@@ -22,6 +22,8 @@ pub mod command_context;
 pub mod db;
 pub mod modules;
 
+pub mod events;
+
 use db::Db;
 
 use command_context::Responder;
@@ -108,6 +110,7 @@ pub struct Handler {
     pub completion_handlers: CompletionStore,
     pub default_command_handler: Option<SpecialCommand>,
     pub self_id: OnceCell<UserId>,
+    pub event_handlers: Arc<events::EventHandlers>,
 }
 
 impl Handler {
@@ -120,6 +123,7 @@ impl Handler {
             special_commands: Default::default(),
             completion_handlers: Default::default(),
             default_command_handler: None,
+            event_handlers: events::EventHandlers::default(),
         }
     }
 
@@ -210,6 +214,7 @@ pub struct HandlerBuilder {
     pub special_commands: HashMap<String, SpecialCommand>,
     pub completion_handlers: CompletionStore,
     pub default_command_handler: Option<SpecialCommand>,
+    pub event_handlers: events::EventHandlers
 }
 
 impl HandlerBuilder {
@@ -221,6 +226,7 @@ impl HandlerBuilder {
         let mut m = M::init(&self.modules).await?;
         m.setup(&mut self.db).await?;
         m.register_commands(&mut self.commands, &mut self.completion_handlers);
+        m.register_event_handlers(&mut self.event_handlers);
         self.modules.add(m);
         Ok(self)
     }
@@ -232,6 +238,7 @@ impl HandlerBuilder {
         self = M::add_dependencies(self).await?;
         m.setup(&mut self.db).await?;
         m.register_commands(&mut self.commands, &mut self.completion_handlers);
+        m.register_event_handlers(&mut self.event_handlers);
         self.modules.add(m);
         Ok(self)
     }
@@ -249,6 +256,7 @@ impl HandlerBuilder {
             special_commands,
             completion_handlers,
             default_command_handler,
+            event_handlers,
         } = self;
         Handler {
             db: Arc::new(Mutex::new(db)),
@@ -259,6 +267,7 @@ impl HandlerBuilder {
             completion_handlers,
             default_command_handler,
             self_id: OnceCell::default(),
+            event_handlers: Arc::new(event_handlers),
         }
     }
 }
@@ -276,6 +285,12 @@ pub trait Module: 'static + Send + Sync + Sized {
         &self,
         _store: &mut CommandStore,
         _completion_handlers: &mut CompletionStore,
+    ) {
+    }
+
+    fn register_event_handlers(
+        &self,
+        _handlers: &mut events::EventHandlers,
     ) {
     }
 

@@ -2034,6 +2034,7 @@ dependencies = [
  "serenity-command-derive",
  "tokio",
  "tokio-stream",
+ "typemap_rev",
 ]
 
 [[package]]

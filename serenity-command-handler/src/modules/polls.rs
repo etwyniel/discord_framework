@@ -20,7 +20,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 
-use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap};
+use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap, events};
 
 const YES: &str = "<:FeelsGoodCrab:988509541069127780>";
 const NO: &str = "<:FeelsBadCrab:988508541499342918>";
@@ -76,6 +76,7 @@ async fn create_poll(
     handler: &Handler,
     ctx: &Context,
     interaction: &CommandInteraction,
+    event_handlers: Arc<events::EventHandlers>,
 ) -> anyhow::Result<()> {
     let module: &ModPoll = handler.module()?;
     let http = &ctx.http;
@@ -139,6 +140,7 @@ async fn create_poll(
         // resp,
         pending_poll,
         receiver,
+        event_handlers,
     ));
     Ok(())
 }
@@ -154,7 +156,8 @@ impl ReadyPoll {
             count_emote: self.count_emote,
             go_emote: self.go_emote,
         };
-        create_poll(poll_type, handler, ctx, interaction).await
+        create_poll(poll_type, handler, ctx, interaction,
+                    Arc::clone(&handler.event_handlers)).await
     }
 }
 
@@ -173,7 +176,9 @@ impl Poll {
         interaction: &CommandInteraction,
     ) -> anyhow::Result<()> {
         let poll_type = PollType::Question(self.question);
-        create_poll(poll_type, handler, ctx, interaction).await
+        create_poll(poll_type, handler, ctx, interaction,
+                    Arc::clone(&handler.event_handlers)
+        ).await
     }
 }
 
@@ -287,6 +292,7 @@ async fn poll_task(
     http: Arc<Http>,
     poll: PendingPoll,
     mut r: Receiver<PollEvent>,
+    event_handlers: Arc<events::EventHandlers>
 ) {
     // poll state
     let mut users_yes = Vec::new(); // list of users who have clicked the YES react
@@ -340,6 +346,7 @@ async fn poll_task(
                         poll.msg.channel_id,
                         count_emote.as_deref(),
                         go_emote.as_deref(),
+                        &event_handlers,
                     )
                     .await;
                     if let Err(e) = res {
@@ -378,6 +385,11 @@ async fn poll_task(
     }
 }
 
+#[derive(Debug)]
+pub struct ReadyPollStarted {
+    pub channel: ChannelId
+}
+
 // performs the actual countdown
 pub async fn crabdown(
     module: Arc<ModPoll>,
@@ -385,6 +397,7 @@ pub async fn crabdown(
     channel: ChannelId,
     count_emote: Option<&str>,
     go_emote: Option<&str>,
+    event_handler: &events::EventHandlers
 ) -> anyhow::Result<()> {
     // announce countdown is starting, wait briefly
     channel.say(http, "Starting 3s countdown").await?;
@@ -404,6 +417,7 @@ pub async fn crabdown(
         interval.tick().await;
     }
     channel.say(http, go_emote).await?;
+    event_handler.emit(&ReadyPollStarted{channel});
     Ok(())
 }
 
