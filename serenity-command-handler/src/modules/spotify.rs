@@ -6,7 +6,10 @@ use regex::Regex;
 use reqwest::redirect::Policy;
 use rspotify::{
     clients::{BaseClient, OAuthClient},
-    model::{AlbumId, FullTrack, Id, PlaylistId, SearchType, SimplifiedArtist, TrackId},
+    model::{
+        AlbumId, FullEpisode, FullTrack, Id, PlayableItem, PlaylistId, SearchType,
+        SimplifiedArtist, TrackId,
+    },
     AuthCodeSpotify, ClientCredsSpotify, Config, Credentials,
 };
 use serenity::{
@@ -64,12 +67,14 @@ impl<C: BaseClient> Spotify<C> {
             .join(", ");
         let genres = album.genres.clone();
         let release_date = Some(album.release_date);
+        let duration = album.tracks.items.iter().map(|track| track.duration).sum();
         Ok(Album {
             name: Some(name),
             artist: Some(artist),
             genres,
             release_date,
             url: Some(album.id.url()),
+            duration: Some(duration),
             ..Default::default()
         })
     }
@@ -81,10 +86,22 @@ impl<C: BaseClient> Spotify<C> {
             .await?;
         let name = playlist.name.clone();
         let artist = playlist.owner.display_name;
+        let duration = playlist
+            .tracks
+            .items
+            .iter()
+            .flat_map(|item| item.track.as_ref())
+            .map(|track| match track {
+                PlayableItem::Track(FullTrack { duration, .. }) => duration,
+                PlayableItem::Episode(FullEpisode { duration, .. }) => duration,
+            })
+            .sum();
         Ok(Album {
             name: Some(name),
             artist,
             url: Some(playlist.id.url()),
+            duration: Some(duration),
+            is_playlist: true,
             ..Default::default()
         })
     }

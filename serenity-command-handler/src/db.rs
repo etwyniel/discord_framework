@@ -14,14 +14,20 @@ pub struct Db {
 }
 
 impl Db {
-    pub fn get_guild_field<T: FromSql>(&mut self, guild_id: u64, field: &str) -> anyhow::Result<T> {
-        self.conn
-            .query_row(
-                &format!("SELECT {field} FROM guild WHERE id = ?1"),
-                [guild_id],
-                |row| row.get(0),
-            )
-            .map_err(anyhow::Error::from)
+    pub fn get_guild_field<T: FromSql + Default>(
+        &mut self,
+        guild_id: u64,
+        field: &str,
+    ) -> anyhow::Result<T> {
+        match self.conn.query_row(
+            &format!("SELECT {field} FROM guild WHERE id = ?1"),
+            [guild_id],
+            |row| row.get(0),
+        ) {
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Default::default()),
+            res => res,
+        }
+        .map_err(anyhow::Error::from)
     }
 
     pub fn set_guild_field<T: ToSql>(
@@ -78,7 +84,7 @@ pub fn column_as_string(val: ValueRef<'_>) -> rusqlite::Result<String> {
 }
 
 impl Handler {
-    pub async fn get_guild_field<T: FromSql>(
+    pub async fn get_guild_field<T: FromSql + Default>(
         &self,
         guild_id: u64,
         field: &str,

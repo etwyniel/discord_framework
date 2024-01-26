@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::Duration;
 use serenity::async_trait;
 
 #[derive(Debug, Default)]
@@ -10,6 +11,7 @@ pub struct Album {
     pub release_date: Option<String>,
     pub url: Option<String>,
     pub is_playlist: bool,
+    pub duration: Option<Duration>,
 }
 
 #[async_trait]

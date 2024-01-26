@@ -3,6 +3,7 @@ use std::fmt::Write;
 use std::ops::Add;
 
 use crate::{db::Db, CommandStore, HandlerBuilder, Module};
+use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context as _;
 use chrono::{prelude::*, Duration};
@@ -16,8 +17,10 @@ use serenity::builder::CreateAllowedMentions;
 use serenity::builder::CreateAutocompleteResponse;
 use serenity::builder::CreateInteractionResponse;
 use serenity::builder::CreateThread;
+use serenity::builder::EditMessage;
 use serenity::builder::EditThread;
 use serenity::builder::ExecuteWebhook;
+use serenity::builder::GetMessages;
 use serenity::client::Context;
 use serenity::model::application::CommandDataOption;
 use serenity::model::application::CommandType;
@@ -53,12 +56,28 @@ pub struct Lp {
     time: Option<String>,
     #[cmd(desc = "Where to look for album info (defaults to spotify)")]
     provider: Option<String>,
+    #[cmd(desc = "Use a specific role instead of the default (admin-only)")]
+    role: Option<RoleId>,
 }
 
-fn convert_lp_time(time: Option<&str>) -> Result<String, anyhow::Error> {
+fn format_end(start: DateTime<Utc>, duration: Option<Duration>) -> String {
+    let Some(duration) = duration else {
+        return String::new();
+    };
+    let end = start.add(duration);
+    format!(", ends at <t:{}:t>", end.timestamp())
+}
+
+fn convert_lp_time(
+    time: Option<&str>,
+    duration: Option<Duration>,
+) -> Result<String, anyhow::Error> {
     let mut lp_time = Utc::now().add(Duration::seconds(10));
     let time = match time {
-        Some("now") | None => return Ok(format!("now (<t:{}:R>)", lp_time.timestamp())),
+        Some("now") | None => {
+            let end_str = format_end(lp_time, duration);
+            return Ok(format!("now (<t:{}:R>{end_str})", lp_time.timestamp()));
+        }
         Some(t) => t,
     };
     let xx_re = Regex::new("(?i)^(XX:?)?([0-5][0-9])$")?; // e.g. XX:15, xx15 or 15
@@ -82,8 +101,12 @@ fn convert_lp_time(time: Option<&str>) -> Result<String, anyhow::Error> {
         return Ok(time.to_string());
     }
 
+    let end_str = format_end(lp_time, duration);
     // timestamp and relative time
-    Ok(format!("at <t:{0:}:t> (<t:{0:}:R>)", lp_time.timestamp()))
+    Ok(format!(
+        "at <t:{0:}:t> (<t:{0:}:R>{end_str})",
+        lp_time.timestamp()
+    ))
 }
 
 async fn get_lastfm_genres(handler: &Handler, info: &Album) -> Option<Vec<String>> {
@@ -112,7 +135,7 @@ async fn build_message_contents(
     time: Option<&str>,
     role_id: Option<u64>,
 ) -> anyhow::Result<String> {
-    let when = convert_lp_time(time)?;
+    let when = convert_lp_time(time, info.duration)?;
     let lp_name = lp_name
         .map(str::to_string)
         .unwrap_or_else(|| info.format_name());
@@ -128,7 +151,23 @@ async fn build_message_contents(
             .unwrap_or_else(|| "Listening party: ".to_string()),
         when
     );
+    if let Some(duration) = info.duration {
+        if duration.num_hours() > 0 {
+            _ = write!(&mut resp_content, "{}h", duration.num_hours());
+        }
+        let minutes = duration.num_minutes() % 60;
+        if minutes > 0 {
+            _ = write!(&mut resp_content, "{minutes:02}m");
+        }
+        let seconds = duration.num_seconds();
+        if seconds < 60 {
+            _ = write!(&mut resp_content, "{seconds}s");
+        }
+    }
     if let Some(genres) = info.format_genres() {
+        if info.duration.is_some() {
+            resp_content.push_str(" | ");
+        }
         _ = writeln!(&mut resp_content, "{}", &genres);
     }
     Ok(resp_content)
@@ -148,7 +187,13 @@ impl BotCommand for Lp {
             mut link,
             time,
             provider,
+            role,
         } = self;
+        if let (Some(_), Some(member)) = (role, &command.member) {
+            if !member.permissions.unwrap_or_default().mention_everyone() {
+                bail!("Only admins are allowed to specify a role to ping.");
+            }
+        }
         let mut lp_name = Some(album);
         if lp_name.as_deref().map(|name| name.starts_with("https://")) == Some(true) {
             // As a special case for convenience, if we have a URL in lp_name, use that as link
@@ -182,7 +227,11 @@ impl BotCommand for Lp {
         }
 
         let guild_id = command.guild_id()?.get();
-        let role_id = handler.get_guild_field(guild_id, "role_id").await?;
+        let mut role_id = handler
+            .get_guild_field(guild_id, "role_id")
+            .await
+            .context("error retrieving LP role")?;
+        role_id = role.map(|r| r.get()).or(role_id);
         let resp_content =
             build_message_contents(lp_name.as_deref(), &info, time.as_deref(), role_id).await?;
         let webhook: Option<String> = handler.get_guild_field(guild_id, "webhook").await?;
@@ -217,9 +266,11 @@ impl BotCommand for Lp {
             .await?
             .unwrap() // Message is present because we set wait to true in execute
         } else {
+            // prefix response with pinger mention
+            let resp = format!("<@{}>: {resp_content}", command.user.id.get());
             // Create interaction response
             command
-                .respond(&ctx.http, CommandResponse::Public(resp_content), role_id)
+                .respond(&ctx.http, CommandResponse::Public(resp), role_id)
                 .await?
                 .unwrap()
         };
@@ -357,6 +408,65 @@ impl BotCommand for SetWebhook {
     }
 }
 
+#[derive(Command)]
+#[cmd(name = "edit_lp", desc = "Edit the last LP you created")]
+pub struct EditLp {
+    cancel: Option<bool>,
+    time: Option<String>,
+}
+
+#[async_trait]
+impl BotCommand for EditLp {
+    type Data = Handler;
+    async fn run(
+        self,
+        handler: &Handler,
+        ctx: &Context,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let messages = command
+            .channel_id
+            .messages(&ctx.http, GetMessages::new().limit(100))
+            .await
+            .context("couldn't retrieve messages")?;
+        let self_id = *handler.self_id.get().unwrap();
+        let author_id = command.user.id.get();
+        let author_id_str = author_id.to_string();
+        let mut msg = messages
+            .into_iter()
+            .filter(|msg| msg.author.id == self_id)
+            .find(|msg| {
+                if let Some(interation) = &msg.interaction {
+                    interation.user.id == author_id && interation.name == "lp"
+                } else {
+                    msg.content.contains(&author_id_str)
+                }
+            })
+            .ok_or_else(|| anyhow!("No recent listening party to edit."))?;
+        if self.cancel == Some(true) {
+            msg.edit(
+                &ctx.http,
+                EditMessage::new().content(format!("~~{}~~", &msg.content)),
+            )
+            .await?;
+            return Ok(CommandResponse::Public(
+                "Canceled listening party".to_string(),
+            ));
+        }
+        if let Some(time) = self.time.as_ref() {
+            let formatted = convert_lp_time(Some(time), None)?;
+            let re = Regex::new(r"(now|at <t:\d+:t>) \(.*\)").unwrap();
+            let replaced = re.replace(&msg.content, &formatted);
+            msg.edit(&ctx.http, EditMessage::new().content(replaced))
+                .await?;
+            return Ok(CommandResponse::Public(format!(
+                "Listening party will start {formatted}"
+            )));
+        }
+        bail!("Nothing to change")
+    }
+}
+
 pub struct ModLp;
 
 impl ModLp {
@@ -393,6 +503,7 @@ impl ModLp {
         }
         Ok(choices)
     }
+
     fn complete_lp<'a>(
         handler: &'a Handler,
         ctx: &'a Context,
@@ -447,6 +558,7 @@ impl Module for ModLp {
         store.register::<SetRole>();
         store.register::<SetCreateThreads>();
         store.register::<SetWebhook>();
+        store.register::<EditLp>();
         completions.push(ModLp::complete_lp);
     }
 }
