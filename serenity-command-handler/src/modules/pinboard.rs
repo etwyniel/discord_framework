@@ -14,6 +14,7 @@ use serenity::{
 };
 use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
+use std::fmt::Write;
 
 use crate::prelude::*;
 
@@ -262,8 +263,13 @@ impl Pinboard {
         let image = images.next();
         if !last_pin.content.is_empty() || image.is_some() {
             embeds.push({
+                let mut content = last_pin.content.clone();
+                if !content.is_empty() {
+                    content.push_str("\n\n");
+                }
+                _ = write!(&mut content, "[(Source)]({})", last_pin.link());
                 let mut em = CreateEmbed::new()
-                    .description(&last_pin.content)
+                    .description(content)
                     .footer(CreateEmbedFooter::new(&footer_str))
                     .timestamp(last_pin.timestamp)
                     .author({
