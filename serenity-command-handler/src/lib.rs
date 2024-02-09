@@ -192,7 +192,7 @@ impl Handler {
             );
             let resp = match resp {
                 Ok(resp) => resp,
-                Err(e) => CommandResponse::Private(e.to_string()),
+                Err(e) => CommandResponse::Private(e.to_string().into()),
             };
 
             if let Err(why) = command.respond(&ctx.http, resp, None).await {

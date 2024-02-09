@@ -1,20 +1,14 @@
 use std::collections::HashMap;
 
-use serenity::all::InteractionResponseFlags;
 use serenity::async_trait;
-use serenity::builder::{CreateCommand, CreateCommandOption, CreateEmbed};
+use serenity::builder::{CreateCommand, CreateCommandOption};
 use serenity::model::application::{CommandData, CommandInteraction, CommandType};
 use serenity::model::prelude::GuildId;
 use serenity::model::Permissions;
 use serenity::prelude::Context;
 
-#[derive(Debug)]
-pub enum CommandResponse {
-    None,
-    Public(String),
-    Private(String),
-    Embed(Box<CreateEmbed>),
-}
+mod command_response;
+pub use command_response::*;
 
 pub type CommandKey<'a> = (&'a str, CommandType);
 
@@ -51,21 +45,6 @@ pub trait BotCommand {
 
     const PERMISSIONS: Permissions = Permissions::empty();
     const GUILD: Option<GuildId> = None;
-}
-
-impl CommandResponse {
-    pub fn to_contents_and_flags(
-        self,
-    ) -> Option<(String, Option<Box<CreateEmbed>>, InteractionResponseFlags)> {
-        Some(match self {
-            CommandResponse::None => return None,
-            CommandResponse::Public(s) => (s, None, InteractionResponseFlags::empty()),
-            CommandResponse::Private(s) => (s, None, InteractionResponseFlags::EPHEMERAL),
-            CommandResponse::Embed(e) => {
-                (String::new(), Some(e), InteractionResponseFlags::empty())
-            }
-        })
-    }
 }
 
 pub trait CommandBuilder<'a>: BotCommand + From<&'a CommandData> + 'static {

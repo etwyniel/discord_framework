@@ -36,7 +36,8 @@ impl Responder for CommandInteraction {
             let mut msg = CreateInteractionResponseMessage::new();
             msg = embeds
                 .into_iter()
-                .fold(msg, |msg, embed| msg.add_embed(*embed));
+                .flatten()
+                .fold(msg, |msg, embed| msg.add_embed(embed));
             msg = msg
                 .content(&contents)
                 .flags(flags)

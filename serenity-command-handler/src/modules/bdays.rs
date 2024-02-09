@@ -103,7 +103,7 @@ impl BotCommand for GetBdays {
         let embed = CreateEmbed::default()
             .author(CreateEmbedAuthor::new(header))
             .description(res);
-        Ok(CommandResponse::Embed(Box::new(embed)))
+        CommandResponse::public(embed)
     }
 }
 
@@ -141,7 +141,7 @@ impl BotCommand for SetBday {
             self.year.map(|y| y as u16),
         )
         .await?;
-        Ok(CommandResponse::Private("Birthday set!".to_string()))
+        CommandResponse::private("Birthday set!")
     }
 
     fn setup_options(opt_name: &'static str, mut opt: CreateCommandOption) -> CreateCommandOption {

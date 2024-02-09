@@ -107,7 +107,7 @@ impl BotCommand for AddAutoreact {
             .entry(guild_id)
             .or_default()
             .push(parsed);
-        Ok(CommandResponse::Private("Autoreact added".to_string()))
+        CommandResponse::private("Autoreact added")
     }
 
     const PERMISSIONS: Permissions = Permissions::MANAGE_GUILD_EXPRESSIONS;
@@ -150,7 +150,7 @@ impl BotCommand for RemoveAutoreact {
         if let Some(reacts) = handler.reacts_cache()?.write().await.get_mut(&guild_id) {
             reacts.retain_mut(|ar| ar.trigger != trigger && ar.emote != emote);
         };
-        Ok(CommandResponse::Private("Autoreact removed".to_string()))
+        CommandResponse::private("Autoreact removed")
     }
 
     const PERMISSIONS: Permissions = Permissions::MANAGE_GUILD_EXPRESSIONS;

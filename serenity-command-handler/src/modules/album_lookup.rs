@@ -56,7 +56,7 @@ impl BotCommand for LookupAlbum {
             _ = writeln!(&mut contents, "{genres}");
         }
         contents.push_str(info.url.as_deref().unwrap_or("no link found"));
-        Ok(CommandResponse::Public(contents))
+        CommandResponse::public(contents)
     }
 }
 

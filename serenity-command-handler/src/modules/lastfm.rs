@@ -1035,7 +1035,7 @@ impl BotCommand for FixReleaseYear {
         if let Some(prev) = current_value {
             resp.push_str(&format!(" (was {prev})"));
         }
-        Ok(CommandResponse::Public(resp))
+        CommandResponse::public(resp)
     }
 }
 

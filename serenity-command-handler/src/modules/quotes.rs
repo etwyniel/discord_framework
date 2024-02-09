@@ -398,7 +398,7 @@ impl GetQuote {
         if let Some(image) = quote.image {
             create = create.image(image);
         }
-        Ok(CommandResponse::Embed(Box::new(create)))
+        CommandResponse::public(create)
     }
 }
 
@@ -428,7 +428,7 @@ impl BotCommand for SaveQuote {
             Some(n) => format!("Quote saved as #{n}: {link}"),
             None => "Quote already added".to_string(),
         };
-        Ok(CommandResponse::Public(resp_text))
+        CommandResponse::public(resp_text)
     }
 }
 
@@ -479,7 +479,7 @@ impl BotCommand for FakeQuote {
         } else if let Some(id) = self.user.map(UserId::get) {
             write!(&mut resp, "\n - <@{id}>").unwrap();
         }
-        Ok(CommandResponse::Public(resp))
+        CommandResponse::public(resp)
     }
 
     fn setup_options(opt_name: &'static str, opt: CreateCommandOption) -> CreateCommandOption {

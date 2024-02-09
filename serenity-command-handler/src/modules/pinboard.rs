@@ -119,14 +119,11 @@ impl BotCommand for SetPinboardWebhook {
             "pinboard_webhook",
             self.webhook.as_deref(),
         )?;
-        Ok(CommandResponse::Private(
-            if self.webhook.is_some() {
-                "Pinboard webhook set"
-            } else {
-                "Pinboard webhook removed"
-            }
-            .to_string(),
-        ))
+        CommandResponse::private(if self.webhook.is_some() {
+            "Pinboard webhook set"
+        } else {
+            "Pinboard webhook removed"
+        })
     }
 
     const PERMISSIONS: Permissions = Permissions::MANAGE_WEBHOOKS;
@@ -344,10 +341,10 @@ impl BotCommand for RegisterChannel {
         db.conn.execute(
             "INSERT INTO pinboard_allowed_channels (guild_id, channel_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
             [guild_id.get(), interaction.channel_id.get()])?;
-        Ok(CommandResponse::Private(format!(
+        CommandResponse::private(format!(
             "Registered <#{}> to pinboard",
             interaction.channel_id.get()
-        )))
+        ))
     }
 }
 
@@ -374,10 +371,10 @@ impl BotCommand for UnregisterChannel {
             "DELETE FROM pinboard_allowed_channels WHERE guild_id = ?1 AND channel_id = ?2",
             [guild_id.get(), interaction.channel_id.get()],
         )?;
-        Ok(CommandResponse::Private(format!(
+        CommandResponse::private(format!(
             "Unregistered <#{}> from pinboard",
             interaction.channel_id.get()
-        )))
+        ))
     }
 }
 
@@ -411,7 +408,7 @@ impl BotCommand for ListChannels {
                     .join("\n")
             ),
         };
-        Ok(CommandResponse::Public(resp))
+        CommandResponse::public(resp)
     }
 }
 

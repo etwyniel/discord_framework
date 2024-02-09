@@ -270,7 +270,7 @@ impl BotCommand for Lp {
             let resp = format!("<@{}>: {resp_content}", command.user.id.get());
             // Create interaction response
             command
-                .respond(&ctx.http, CommandResponse::Public(resp), role_id)
+                .respond(&ctx.http, CommandResponse::Public(resp.into()), role_id)
                 .await?
                 .unwrap()
         };
@@ -304,9 +304,9 @@ impl BotCommand for Lp {
         if let Some(wh) = wh {
             // If we used a webhook, we still need to create the interaction response
             let response = if wh.channel_id == Some(command.channel_id) {
-                CommandResponse::Private(response)
+                CommandResponse::Private(response.into())
             } else {
-                CommandResponse::Public(response)
+                CommandResponse::Public(response.into())
             };
             command.respond(&ctx.http, response, None).await?;
         }
@@ -342,7 +342,7 @@ impl BotCommand for SetCreateThreads {
         } else {
             "Will not create threads when setting up listening parties"
         };
-        Ok(CommandResponse::Private(resp.to_string()))
+        CommandResponse::private(resp)
     }
 }
 
@@ -372,7 +372,7 @@ impl BotCommand for SetRole {
         } else {
             "Unset listening party role.".to_string()
         };
-        Ok(CommandResponse::Private(resp))
+        CommandResponse::private(resp)
     }
 }
 
@@ -404,7 +404,7 @@ impl BotCommand for SetWebhook {
         } else {
             "Listening parties will not be created using a webhook."
         };
-        Ok(CommandResponse::Private(resp.to_string()))
+        CommandResponse::private(resp)
     }
 }
 
@@ -449,9 +449,7 @@ impl BotCommand for EditLp {
                 EditMessage::new().content(format!("~~{}~~", &msg.content)),
             )
             .await?;
-            return Ok(CommandResponse::Public(
-                "Canceled listening party".to_string(),
-            ));
+            return CommandResponse::public("Canceled listening party");
         }
         if let Some(time) = self.time.as_ref() {
             let formatted = convert_lp_time(Some(time), None)?;
@@ -459,9 +457,7 @@ impl BotCommand for EditLp {
             let replaced = re.replace(&msg.content, &formatted);
             msg.edit(&ctx.http, EditMessage::new().content(replaced))
                 .await?;
-            return Ok(CommandResponse::Public(format!(
-                "Listening party will start {formatted}"
-            )));
+            return CommandResponse::public(format!("Listening party will start {formatted}"));
         }
         bail!("Nothing to change")
     }

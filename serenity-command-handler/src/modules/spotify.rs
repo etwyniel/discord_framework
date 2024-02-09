@@ -422,7 +422,7 @@ impl BotCommand for Unlink {
             resp.push('\n');
             resp.push_str(&url)
         });
-        Ok(CommandResponse::Public(resp))
+        CommandResponse::public(resp)
     }
 }
 

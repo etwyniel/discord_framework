@@ -77,7 +77,7 @@ impl Query {
             );
         }
         resp.push_str("```");
-        Ok(CommandResponse::Public(resp))
+        CommandResponse::public(resp)
     }
 }
 
