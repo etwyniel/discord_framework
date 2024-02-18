@@ -11,6 +11,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::{future::BoxFuture, FutureExt};
 use itertools::Itertools;
+use rand::random;
 use regex::Regex;
 use rusqlite::{params, Error::SqliteFailure, ErrorCode};
 use serenity::{
@@ -383,7 +384,11 @@ impl GetQuote {
         };
         if hide_author {
             let hide_author_re = Regex::new("(<@\\d+>)").unwrap();
-            contents = hide_author_re.replace_all(&contents, "||$1||").to_string();
+            let padding = random::<usize>() % 10;
+            let mut patt = "||$1`".to_string();
+            patt.push_str(&" ".repeat(padding));
+            patt.push_str("`||");
+            contents = hide_author_re.replace_all(&contents, &patt).to_string();
         }
         let mut create = CreateEmbed::default()
             .author(

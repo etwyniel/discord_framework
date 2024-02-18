@@ -50,6 +50,17 @@ impl Album {
             _ => "this".to_string(),
         }
     }
+
+    pub fn as_link(&self, text: Option<&str>) -> String {
+        let text = text
+            .map(str::to_string)
+            .unwrap_or_else(|| self.format_name());
+        if let Some(link) = &self.url {
+            format!("[**{text}**]({link})")
+        } else {
+            text
+        }
+    }
 }
 
 #[async_trait]

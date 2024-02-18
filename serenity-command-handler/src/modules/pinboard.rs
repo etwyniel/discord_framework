@@ -162,12 +162,14 @@ impl Pinboard {
         channel: ChannelId,
         guild_id: GuildId,
     ) -> anyhow::Result<()> {
-        let pinboard_webhook: String = handler
+        let pinboard_webhook = handler
             .db
             .lock()
             .await
             .get_guild_field(guild_id.get(), "pinboard_webhook")
-            .map_err(|_| anyhow!("No webhook configured"))?;
+            .ok()
+            .filter(|s: &String| !s.is_empty())
+            .ok_or_else(|| anyhow!("No webhook configured"))?;
         let allowed_channels = load_allowed_channels(handler, guild_id).await?;
         if !(allowed_channels.is_empty() || allowed_channels.contains(&channel)) {
             return Ok(());

@@ -9,12 +9,18 @@ use anyhow::Context as _;
 use chrono::{prelude::*, Duration};
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use itertools::Itertools;
 use regex::Regex;
+use reqwest::Url;
+use serde::Deserialize;
+use serde::Serialize;
 use serenity::all::AutoArchiveDuration;
+use serenity::all::Message;
 use serenity::all::RoleId;
 use serenity::async_trait;
 use serenity::builder::CreateAllowedMentions;
 use serenity::builder::CreateAutocompleteResponse;
+use serenity::builder::CreateCommandOption;
 use serenity::builder::CreateInteractionResponse;
 use serenity::builder::CreateThread;
 use serenity::builder::EditMessage;
@@ -39,7 +45,22 @@ use serenity_command::{BotCommand, CommandKey};
 
 use super::AlbumLookup;
 
-#[derive(Command)]
+const SEPARATOR: char = '\u{200B}';
+const LP_URI: &str = "http://lp";
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ResolvedLp {
+    #[serde(rename = "rtitle")]
+    pub resolved_title: Option<String>,
+    #[serde(rename = "rlink")]
+    pub resolved_link: Option<String>,
+    #[serde(rename = "rstart")]
+    pub resolved_start: Option<DateTime<Utc>>,
+    #[serde(flatten)]
+    pub params: Lp,
+}
+
+#[derive(Command, Serialize, Deserialize, Debug)]
 #[cmd(name = "lp", desc = "run a listening party")]
 pub struct Lp {
     #[cmd(
@@ -71,12 +92,19 @@ fn format_end(start: DateTime<Utc>, duration: Option<Duration>) -> String {
 fn convert_lp_time(
     time: Option<&str>,
     duration: Option<Duration>,
-) -> Result<String, anyhow::Error> {
+    resolved_start: Option<DateTime<Utc>>,
+) -> anyhow::Result<(String, Option<DateTime<Utc>>)> {
+    if let (Some(start), None) = (resolved_start, time) {
+        let end_str = format_end(start, duration);
+        let formatted = format!("at <t:{0:}:t> (<t:{0:}:R>{end_str})", start.timestamp());
+        return Ok((formatted, Some(start)));
+    }
     let mut lp_time = Utc::now().add(Duration::seconds(10));
     let time = match time {
         Some("now") | None => {
             let end_str = format_end(lp_time, duration);
-            return Ok(format!("now (<t:{}:R>{end_str})", lp_time.timestamp()));
+            let formatted = format!("now (<t:{}:R>{end_str})", lp_time.timestamp());
+            return Ok((formatted, Some(lp_time)));
         }
         Some(t) => t,
     };
@@ -98,14 +126,14 @@ fn convert_lp_time(
         let extra_mins: i64 = cap.get(1).unwrap().as_str().parse()?;
         lp_time = lp_time.add(Duration::minutes(extra_mins));
     } else {
-        return Ok(time.to_string());
+        return Ok((time.to_string(), None));
     }
 
     let end_str = format_end(lp_time, duration);
     // timestamp and relative time
-    Ok(format!(
-        "at <t:{0:}:t> (<t:{0:}:R>{end_str})",
-        lp_time.timestamp()
+    Ok((
+        format!("at <t:{0:}:t> (<t:{0:}:R>{end_str})", lp_time.timestamp()),
+        Some(lp_time),
     ))
 }
 
@@ -130,22 +158,17 @@ async fn get_lastfm_genres(handler: &Handler, info: &Album) -> Option<Vec<String
 }
 
 async fn build_message_contents(
+    lp: Lp,
     lp_name: Option<&str>,
     info: &Album,
-    time: Option<&str>,
     role_id: Option<u64>,
+    resolved_start: Option<DateTime<Utc>>,
 ) -> anyhow::Result<String> {
-    let when = convert_lp_time(time, info.duration)?;
-    let lp_name = lp_name
-        .map(str::to_string)
-        .unwrap_or_else(|| info.format_name());
-    let hyperlinked = if let Some(link) = &info.url {
-        format!("[**{lp_name}**]({link})")
-    } else {
-        lp_name
-    };
+    let (when, resolved_start) =
+        convert_lp_time(lp.time.as_deref(), info.duration, resolved_start)?;
+    let hyperlinked = info.as_link(lp_name);
     let mut resp_content = format!(
-        "{} {hyperlinked} {}\n",
+        "{} {SEPARATOR}{hyperlinked}{SEPARATOR} {}\n",
         role_id // mention role if set
             .map(|id| format!("<@&{id}>"))
             .unwrap_or_else(|| "Listening party: ".to_string()),
@@ -168,9 +191,89 @@ async fn build_message_contents(
         if info.duration.is_some() {
             resp_content.push_str(" | ");
         }
-        _ = writeln!(&mut resp_content, "{}", &genres);
+        _ = write!(&mut resp_content, "{}", &genres);
     }
+    let resolved = ResolvedLp {
+        resolved_start,
+        resolved_title: lp_name.map(|s| s.to_string()),
+        resolved_link: info.url.clone(),
+        params: lp,
+    };
+    let encoded_data = serde_urlencoded::ser::to_string(resolved).unwrap();
+    let mut encoded_data_url = Url::parse(LP_URI).unwrap();
+    encoded_data_url.set_query(Some(&encoded_data));
+    let data: String = encoded_data_url.into();
+    _ = write!(&mut resp_content, "[̣]({data})");
     Ok(resp_content)
+}
+
+async fn find_album<'a>(
+    handler: &Handler,
+    album: &'a str,
+    mut link: Option<&str>,
+    provider: Option<&str>,
+) -> anyhow::Result<(Option<&'a str>, Album)> {
+    let mut lp_name = Some(album);
+    if lp_name.map(|name| name.starts_with("https://")) == Some(true) {
+        // As a special case for convenience, if we have a URL in lp_name, use that as link
+        if link.is_some() && link != lp_name {
+            lp_name = None;
+        } else {
+            link = lp_name.take();
+        }
+    }
+    let lookup: &AlbumLookup = handler.module()?;
+    // Depending on what we have, look up more information
+    let info = match (lp_name, &link) {
+        (Some(name), None) => lookup.lookup_album(name, provider).await?,
+        (name, Some(lnk)) => {
+            let mut info = lookup.get_album_info(lnk).await?;
+            if let Some((info, name)) = info.as_mut().zip(name) {
+                info.name = Some(name.to_string())
+            };
+            info
+        }
+        (None, None) => bail!("Please specify something to LP"),
+    }
+    .unwrap_or_else(|| Album {
+        url: link.map(|s| s.to_string()),
+        ..Default::default()
+    });
+    Ok((lp_name, info))
+}
+
+impl Lp {
+    async fn build_contents(
+        self,
+        handler: &Handler,
+        command: &CommandInteraction,
+        resolved_start: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<(String, Option<u64>, Album)> {
+        let Lp {
+            album,
+            link,
+            provider,
+            role,
+            ..
+        } = &self;
+        let (lp_name, mut info) =
+            find_album(handler, album, link.as_deref(), provider.as_deref()).await?;
+        let lp_name = lp_name.map(|s| s.to_string());
+        // get genres if needed
+        if let Some(genres) = get_lastfm_genres(handler, &info).await {
+            info.genres = genres
+        }
+        let guild_id = command.guild_id()?.get();
+        let mut role_id = handler
+            .get_guild_field(guild_id, "role_id")
+            .await
+            .context("error retrieving LP role")?;
+        role_id = role.map(|r| r.get()).or(role_id);
+        let resp_content =
+            build_message_contents(self, lp_name.as_deref(), &info, role_id, resolved_start)
+                .await?;
+        Ok((resp_content, role_id, info))
+    }
 }
 
 #[async_trait]
@@ -182,58 +285,14 @@ impl BotCommand for Lp {
         ctx: &Context,
         command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let Lp {
-            album,
-            mut link,
-            time,
-            provider,
-            role,
-        } = self;
-        if let (Some(_), Some(member)) = (role, &command.member) {
+        if let (Some(_), Some(member)) = (self.role, &command.member) {
             if !member.permissions.unwrap_or_default().mention_everyone() {
                 bail!("Only admins are allowed to specify a role to ping.");
             }
         }
-        let mut lp_name = Some(album);
-        if lp_name.as_deref().map(|name| name.starts_with("https://")) == Some(true) {
-            // As a special case for convenience, if we have a URL in lp_name, use that as link
-            if link.is_some() && link != lp_name {
-                lp_name = None;
-            } else {
-                link = lp_name.take();
-            }
-        }
-        let lookup: &AlbumLookup = handler.module()?;
         let http = &ctx.http;
-        // Depending on what we have, look up more information
-        let mut info = match (&lp_name, &link) {
-            (Some(name), None) => lookup.lookup_album(name, provider.as_deref()).await?,
-            (name, Some(lnk)) => {
-                let mut info = lookup.get_album_info(lnk).await?;
-                if let Some((info, name)) = info.as_mut().zip(name.clone()) {
-                    info.name = Some(name)
-                };
-                info
-            }
-            (None, None) => bail!("Please specify something to LP"),
-        }
-        .unwrap_or_else(|| Album {
-            url: link,
-            ..Default::default()
-        });
-        // get genres if needed
-        if let Some(genres) = get_lastfm_genres(handler, &info).await {
-            info.genres = genres
-        }
-
+        let (resp_content, role_id, info) = self.build_contents(handler, command, None).await?;
         let guild_id = command.guild_id()?.get();
-        let mut role_id = handler
-            .get_guild_field(guild_id, "role_id")
-            .await
-            .context("error retrieving LP role")?;
-        role_id = role.map(|r| r.get()).or(role_id);
-        let resp_content =
-            build_message_contents(lp_name.as_deref(), &info, time.as_deref(), role_id).await?;
         let webhook: Option<String> = handler.get_guild_field(guild_id, "webhook").await?;
         let wh = match webhook.as_deref().map(|url| http.get_webhook_from_url(url)) {
             Some(fut) => Some(fut.await?),
@@ -291,8 +350,9 @@ impl BotCommand for Lp {
             } else if let Some((ChannelType::Text, c)) = &guild_chan {
                 // Create thread from response message
                 let thread = c
-                    .create_thread(
+                    .create_thread_from_message(
                         http,
+                        message,
                         CreateThread::new(thread_name)
                             .kind(ChannelType::PublicThread)
                             .auto_archive_duration(AutoArchiveDuration::OneHour),
@@ -311,6 +371,15 @@ impl BotCommand for Lp {
             command.respond(&ctx.http, response, None).await?;
         }
         Ok(CommandResponse::None)
+    }
+
+    fn setup_options(opt_name: &str, opt: CreateCommandOption) -> CreateCommandOption {
+        if opt_name == "provider" {
+            opt.add_string_choice("spotify", "spotify")
+                .add_string_choice("bandcamp", "bandcamp")
+        } else {
+            opt
+        }
     }
 }
 
@@ -411,8 +480,69 @@ impl BotCommand for SetWebhook {
 #[derive(Command)]
 #[cmd(name = "edit_lp", desc = "Edit the last LP you created")]
 pub struct EditLp {
-    cancel: Option<bool>,
+    #[cmd(autocomplete)]
+    album: Option<String>,
     time: Option<String>,
+    cancel: Option<bool>,
+}
+
+impl EditLp {
+    async fn edit_from_embedded_data(
+        &self,
+        handler: &Handler,
+        ctx: &Context,
+        msg: &mut Message,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let Some(pos) = msg.content.find(LP_URI) else {
+            bail!("no embedded data");
+        };
+        let url: Url = msg.content[pos..]
+            .trim_end_matches(')')
+            .parse()
+            .context("invalid embedded URL")?;
+        let mut lp: ResolvedLp = serde_urlencoded::de::from_str(url.query().unwrap_or_default())
+            .context("failed to deserialize embedded data")?;
+        let mut changed = false;
+        if let Some(album) = &self.album {
+            lp.params.album = album.clone();
+            lp.params.link = None;
+            changed = true;
+        }
+        if let Some(time) = &self.time {
+            lp.params.time = Some(time.clone());
+            changed = true;
+        } else {
+            // time hasn't changed, set it to None in params so resolved_start is used instead
+            lp.params.time = None;
+        }
+        if !changed {
+            bail!("Nothing to change");
+        }
+        let (contents, role_id, info) = lp
+            .params
+            .build_contents(handler, command, lp.resolved_start)
+            .await?;
+        // prefix response with pinger mention
+        let contents = format!("<@{}>: {contents}", command.user.id.get());
+        msg.edit(
+            &ctx.http,
+            EditMessage::new()
+                .content(contents)
+                .allowed_mentions(CreateAllowedMentions::new().roles(role_id)),
+        )
+        .await?;
+        // build response to indicate what was updated
+        let mut resp = String::new();
+        if self.album.is_some() {
+            _ = writeln!(&mut resp, "Updated album to {}", info.as_link(None));
+        }
+        if self.time.is_some() {
+            let (when, _) = convert_lp_time(self.time.as_deref(), info.duration, None)?;
+            _ = writeln!(&mut resp, "Listening party will start {when}");
+        }
+        CommandResponse::public(resp)
+    }
 }
 
 #[async_trait]
@@ -451,15 +581,39 @@ impl BotCommand for EditLp {
             .await?;
             return CommandResponse::public("Canceled listening party");
         }
-        if let Some(time) = self.time.as_ref() {
-            let formatted = convert_lp_time(Some(time), None)?;
-            let re = Regex::new(r"(now|at <t:\d+:t>) \(.*\)").unwrap();
-            let replaced = re.replace(&msg.content, &formatted);
-            msg.edit(&ctx.http, EditMessage::new().content(replaced))
-                .await?;
-            return CommandResponse::public(format!("Listening party will start {formatted}"));
+        match self
+            .edit_from_embedded_data(handler, ctx, &mut msg, command)
+            .await
+        {
+            Ok(resp) => return Ok(resp),
+            Err(e) => eprintln!("Could not edit LP from embedded data: {e:?}"),
         }
-        bail!("Nothing to change")
+        let mut new_content = Cow::<'_, str>::Borrowed(&msg.content);
+        let mut resp = String::new();
+        if let Some(album) = self.album {
+            let (lp_name, info) = find_album(handler, &album, None, None).await?;
+            let hyperlinked = info.as_link(lp_name);
+            new_content = Cow::Owned(
+                new_content
+                    .splitn(3, SEPARATOR)
+                    .enumerate()
+                    .map(|(i, s)| if i != 1 { s } else { &hyperlinked })
+                    .join(&SEPARATOR.to_string()),
+            );
+            _ = writeln!(&mut resp, "Listening party album updated to {hyperlinked}");
+        }
+        if let Some(time) = self.time.as_ref() {
+            let (formatted, _) = convert_lp_time(Some(time), None, None)?;
+            let re = Regex::new(r"(now|at <t:\d+:t>) \(.*\)").unwrap();
+            new_content = Cow::Owned(re.replace(&new_content, &formatted).to_string());
+            _ = writeln!(&mut resp, "Listening party will start {formatted}");
+        }
+        if resp.is_empty() {
+            bail!("Nothing to change")
+        }
+        msg.edit(&ctx.http, EditMessage::new().content(new_content))
+            .await?;
+        return CommandResponse::public(resp);
     }
 }
 
@@ -507,12 +661,13 @@ impl ModLp {
         ac: &'a CommandInteraction,
     ) -> BoxFuture<'a, anyhow::Result<bool>> {
         async move {
-            if key != ("lp", CommandType::ChatInput) {
+            let ("lp" | "edit_lp", CommandType::ChatInput) = key else {
                 return Ok(false);
-            }
+            };
             let choices = Self::autocomplete_lp(handler, &ac.data.options).await?;
             let resp = choices
                 .into_iter()
+                .filter(|(_, value)| value.len() < 100)
                 .fold(CreateAutocompleteResponse::new(), |resp, (name, value)| {
                     resp.add_string_choice(name, value)
                 });
