@@ -34,7 +34,7 @@ impl Album {
         }
         Some(self.genres.iter().fold(String::new(), |mut out, s| {
             if !out.is_empty() {
-                out.push_str("  ");
+                out.push_str(" • ");
             }
             out.push('`');
             out.push_str(&s.to_lowercase());
