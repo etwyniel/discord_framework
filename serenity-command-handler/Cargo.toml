@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "unstable_discord_api", "cache"] }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-rspotify = { version = "0.11", features = ["cli"] }
+rspotify = { version = "0.12", features = ["cli"] }
 rusqlite = "0.30"
 regex = "1.6"
 anyhow = "1.0"
@@ -20,9 +20,10 @@ futures = "0.3.27"
 image = "0.24.5"
 itertools = "0.12"
 serde = "1.0.156"
-rspotify-http = "0.11.6"
+rspotify-http = "0.12.0"
 tokio-stream = "0.1.12"
 scraper = "0.18.0"
 fallible-iterator = "0.3.0"
 rand = "0.8.5"
 markov = "1.1.0"
+typemap_rev = "0.3.0"
