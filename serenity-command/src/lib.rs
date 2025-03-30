@@ -16,13 +16,13 @@ pub struct CommandStore<'a, T>(
     pub HashMap<CommandKey<'a>, Box<dyn CommandRunner<T> + Send + Sync>>,
 );
 
-impl<'a, T> Default for CommandStore<'a, T> {
+impl<T> Default for CommandStore<'_, T> {
     fn default() -> Self {
         CommandStore(HashMap::default())
     }
 }
 
-impl<'a, T> CommandStore<'a, T> {
+impl<T> CommandStore<'_, T> {
     pub fn register<B: CommandBuilder<'static, Data = T>>(&mut self) {
         let runner = B::runner();
         self.0.insert(runner.name(), runner);

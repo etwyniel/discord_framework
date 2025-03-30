@@ -12,6 +12,7 @@ pub struct Album {
     pub url: Option<String>,
     pub is_playlist: bool,
     pub duration: Option<Duration>,
+    pub cover: Option<String>,
 }
 
 #[async_trait]

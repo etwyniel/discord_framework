@@ -214,7 +214,7 @@ pub struct HandlerBuilder {
     pub special_commands: HashMap<String, SpecialCommand>,
     pub completion_handlers: CompletionStore,
     pub default_command_handler: Option<SpecialCommand>,
-    pub event_handlers: events::EventHandlers
+    pub event_handlers: events::EventHandlers,
 }
 
 impl HandlerBuilder {
@@ -288,11 +288,7 @@ pub trait Module: 'static + Send + Sync + Sized {
     ) {
     }
 
-    fn register_event_handlers(
-        &self,
-        _handlers: &mut events::EventHandlers,
-    ) {
-    }
+    fn register_event_handlers(&self, _handlers: &mut events::EventHandlers) {}
 
     const AUTOCOMPLETES: &'static [&'static str] = &[];
 }

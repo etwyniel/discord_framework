@@ -1,13 +1,15 @@
 use std::{
-    borrow::Cow,
+    borrow::{Borrow, Cow},
     cmp::{Eq, PartialEq},
     collections::HashSet,
     fmt::Write,
     hash::Hash,
+    sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context as _};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Local, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::{future::BoxFuture, FutureExt};
 use itertools::Itertools;
@@ -15,6 +17,7 @@ use rand::random;
 use regex::Regex;
 use rusqlite::{params, Error::SqliteFailure, ErrorCode};
 use serenity::{
+    all::{AutoArchiveDuration, CreateMessage, CreateThread, Http},
     async_trait,
     builder::{
         CreateAutocompleteResponse, CreateCommandOption, CreateEmbed, CreateEmbedAuthor,
@@ -27,13 +30,14 @@ use serenity::{
         id::MessageId,
         prelude::{ChannelId, GuildId, ReactionType, UserId},
     },
-    prelude::Context,
+    prelude::{Context, Mutex},
 };
 
 use serenity_command::{BotCommand, CommandKey, CommandResponse};
 use serenity_command_derive::Command;
+use tokio::time::interval;
 
-use crate::{command_context::get_str_opt_ac, prelude::*};
+use crate::{command_context::get_str_opt_ac, db::Db, prelude::*};
 
 pub async fn message_to_quote_contents(
     _handler: &Handler,
@@ -105,25 +109,20 @@ pub struct Quote {
     pub image: Option<String>,
 }
 
-pub async fn fetch_quote(
-    handler: &Handler,
-    guild_id: u64,
-    quote_number: u64,
-) -> anyhow::Result<Option<Quote>> {
-    let db = handler.db.lock().await;
+pub fn fetch_quote(db: &Db, guild_id: u64, quote_number: u64) -> anyhow::Result<Option<Quote>> {
     let res = db.conn.query_row(
             "SELECT guild_id, channel_id, message_id, ts, author_id, author_name, contents, image FROM quote
      WHERE guild_id = ?1 AND quote_number = ?2",
             [guild_id, quote_number],
             |row| {
-                let dt = NaiveDateTime::from_timestamp_opt(row.get(3)?, 0)
+                let ts = DateTime::from_timestamp(row.get(3)?, 0)
                     .unwrap_or_default(); // yes this was quoted in 1970, what of it?
                 Ok(Quote {
                     quote_number,
                     guild_id: row.get(0)?,
                     channel_id: row.get(1)?,
                     message_id: MessageId::new(row.get(2)?),
-                    ts: DateTime::<Utc>::from_utc(dt, Utc),
+                    ts,
                     author_id: row.get(4)?,
                     author_name: row.get(5)?,
                     contents: crate::db::column_as_string(row.get_ref(6)?)?,
@@ -190,13 +189,12 @@ pub async fn add_quote(
     Ok(Some(last_quote + 1))
 }
 
-pub async fn get_random_quote(
-    handler: &Handler,
+pub fn get_random_quote(
+    db: &Db,
     guild_id: u64,
     user: Option<u64>,
 ) -> anyhow::Result<Option<Quote>> {
     let number = {
-        let db = handler.db.lock().await;
         let mut stmt = db.conn.prepare(
             "SELECT quote_number FROM quote WHERE guild_id = ?1 AND (?2 IS NULL OR author_id = ?2)",
         )?;
@@ -209,7 +207,7 @@ pub async fn get_random_quote(
         }
         numbers[rand::random::<usize>() % numbers.len()]
     };
-    fetch_quote(handler, guild_id, number).await
+    fetch_quote(db, guild_id, number)
 }
 
 #[derive(Clone)]
@@ -337,6 +335,44 @@ impl BotCommand for GetQuote {
     }
 }
 
+struct QuoteEmbedElements {
+    contents: String,
+    author_avatar: Option<String>,
+    channel_name: String,
+    message_url: String,
+}
+
+async fn create_quote_embed(http: &Http, quote: &Quote) -> anyhow::Result<QuoteEmbedElements> {
+    let message_url = format!(
+        "https://discord.com/channels/{}/{}/{}",
+        quote.guild_id, quote.channel_id, quote.message_id
+    );
+    let channel = ChannelId::new(quote.channel_id)
+        .to_channel(http)
+        .await?
+        .guild();
+    let channel_name = channel
+        .as_ref()
+        .map(|c| c.name())
+        .unwrap_or("unknown-channel")
+        .to_owned();
+    let contents = format!(
+        "{}\n- <@{}> [(Source)]({})",
+        &quote.contents, quote.author_id, message_url
+    );
+    let author_avatar = UserId::new(quote.author_id)
+        .to_user(http)
+        .await?
+        .avatar_url()
+        .filter(|av| av.starts_with("http"));
+    Ok(QuoteEmbedElements {
+        contents,
+        author_avatar,
+        channel_name,
+        message_url,
+    })
+}
+
 impl GetQuote {
     pub async fn get_quote(
         self,
@@ -344,38 +380,22 @@ impl GetQuote {
         ctx: &Context,
         guild_id: u64,
     ) -> anyhow::Result<CommandResponse> {
-        let quote = if let Some(quote_number) = self.number {
-            fetch_quote(handler, guild_id, quote_number as u64).await?
-        } else {
-            get_random_quote(handler, guild_id, self.user.map(|u| u.get())).await?
+        let quote = {
+            let db = handler.db.lock().await;
+            if let Some(quote_number) = self.number {
+                fetch_quote(db.borrow(), guild_id, quote_number as u64)?
+            } else {
+                get_random_quote(db.borrow(), guild_id, self.user.map(|u| u.get()))?
+            }
         }
         .ok_or_else(|| anyhow!("No such quote"))?;
-        let message_url = format!(
-            "https://discord.com/channels/{}/{}/{}",
-            quote.guild_id, quote.channel_id, quote.message_id
-        );
-        let channel = ChannelId::new(quote.channel_id)
-            .to_channel(&ctx.http)
-            .await?
-            .guild();
-        let channel_name = channel
-            .as_ref()
-            .map(|c| c.name())
-            .unwrap_or("unknown-channel");
+        let QuoteEmbedElements {
+            mut contents,
+            author_avatar,
+            channel_name,
+            message_url,
+        } = create_quote_embed(&ctx.http, &quote).await?;
         let hide_author = self.hide_author == Some(true);
-        let mut contents = format!(
-            "{}\n- <@{}> [(Source)]({})",
-            &quote.contents, quote.author_id, message_url
-        );
-        let author_avatar = if hide_author {
-            None
-        } else {
-            UserId::new(quote.author_id)
-                .to_user(&ctx.http)
-                .await?
-                .avatar_url()
-                .filter(|av| av.starts_with("http"))
-        };
         let quote_header = match (self.user, self.number, hide_author) {
             (_, Some(_), _) => "".to_string(), // Set quote number, not random
             (Some(_), _, false) => format!(" - Random quote from {}", &quote.author_name),
@@ -424,7 +444,10 @@ impl BotCommand for SaveQuote {
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
             .get();
-        let quote_number = add_quote(handler, ctx, guild_id, &self.0).await?;
+        // messages received through command interactions are partial
+        // retrieve full message to have referenced_message
+        let message = ctx.http.get_message(self.0.channel_id, self.0.id).await?;
+        let quote_number = add_quote(handler, ctx, guild_id, &message).await?;
         let link = self
             .0
             .id
@@ -498,6 +521,96 @@ impl BotCommand for FakeQuote {
     }
 }
 
+pub async fn send_qotd(
+    db: &Mutex<Db>,
+    http: &Http,
+    guild_id: u64,
+    channel_id: u64,
+) -> anyhow::Result<()> {
+    // let Some(channel_id): Option<u64> = db.get_guild_field(guild_id, "qotd_channel_id")? else {
+    //     return Ok(());
+    // };
+    let today = Local::now().date_naive();
+    let Some(qotd) = ({
+        // access db in inner scope to avoid holding lock across awaits
+        get_random_quote(db.lock().await.borrow(), guild_id, None)?
+    }) else {
+        return Ok(());
+    };
+    let QuoteEmbedElements {
+        contents,
+        author_avatar,
+        channel_name,
+        message_url,
+    } = create_quote_embed(http, &qotd).await?;
+    let mut embed = CreateEmbed::default()
+        .author(
+            CreateEmbedAuthor::new(format!("#{} - Quote of the day", qotd.quote_number))
+                .icon_url(author_avatar.unwrap_or_default()),
+        )
+        .description(&contents)
+        .url(message_url)
+        .footer(CreateEmbedFooter::new(format!("in #{channel_name}")))
+        .timestamp(model::Timestamp::parse(&qotd.ts.format("%+").to_string()).unwrap());
+
+    if let Some(image) = qotd.image {
+        embed = embed.image(image);
+    }
+    let channel = ChannelId::new(channel_id);
+    let msg = channel
+        .send_message(http, CreateMessage::new().embed(embed))
+        .await?;
+    let thread_name = if qotd.contents.is_empty() {
+        format!("Quote #{}", qotd.quote_number)
+    } else {
+        qotd.contents.chars().take(100).collect::<String>()
+    };
+    channel
+        .create_thread_from_message(
+            http,
+            msg.id,
+            CreateThread::new(thread_name).auto_archive_duration(AutoArchiveDuration::OneDay),
+        )
+        .await?;
+    db.lock()
+        .await
+        .set_guild_field(guild_id, "qotd_last_sent", today)?;
+    Ok(())
+}
+
+pub async fn qotd_loop(db: Arc<Mutex<Db>>, http: Arc<Http>) {
+    let mut interval = interval(Duration::from_secs(3600));
+    loop {
+        interval.tick().await;
+        let now = Local::now();
+        if now.hour() != 11 {
+            continue;
+        }
+        let guilds_and_channels = {
+            let db = db.lock().await;
+            let mut stmt = db
+                .conn
+                .prepare(
+                    r"SELECT id, qotd_channel_id FROM guild
+                         WHERE qotd_channel_id IS NOT NULL AND
+                         (qotd_last_sent iS NULL OR qotd_last_sent < ?1)",
+                )
+                .unwrap();
+            stmt.query([now.date_naive().to_string()])
+                .unwrap()
+                .map(|row| Ok((row.get(0)?, row.get(1)?)))
+                .iterator()
+                .filter_map(Result::ok)
+                .collect::<Vec<_>>()
+        };
+        for (guild_id, channel_id) in guilds_and_channels {
+            if let Err(e) = send_qotd(&db, http.as_ref(), guild_id, channel_id).await {
+                eprintln!("Error sending quote of the day for guild {guild_id}: {e:?}");
+            }
+        }
+    }
+}
+
 pub struct Quotes;
 
 impl Quotes {
@@ -559,6 +672,8 @@ impl Module for Quotes {
             )",
             [],
         )?;
+        db.add_guild_field("qotd_channel_id", "INTEGER")?;
+        db.add_guild_field("qotd_last_sent", "STRING")?;
         Ok(())
     }
 

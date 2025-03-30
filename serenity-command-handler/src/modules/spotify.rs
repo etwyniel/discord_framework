@@ -75,6 +75,7 @@ impl<C: BaseClient> Spotify<C> {
             release_date,
             url: Some(album.id.url()),
             duration: Some(duration),
+            cover: album.images.first().map(|img| img.url.clone()),
             ..Default::default()
         })
     }

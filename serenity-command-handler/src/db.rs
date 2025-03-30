@@ -15,7 +15,7 @@ pub struct Db {
 
 impl Db {
     pub fn get_guild_field<T: FromSql + Default>(
-        &mut self,
+        &self,
         guild_id: u64,
         field: &str,
     ) -> anyhow::Result<T> {
@@ -31,7 +31,7 @@ impl Db {
     }
 
     pub fn set_guild_field<T: ToSql>(
-        &mut self,
+        &self,
         guild_id: u64,
         field: &str,
         value: T,

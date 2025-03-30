@@ -6,21 +6,21 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "unstable_discord_api", "cache"] }
+serenity = { git = "https://github.com/serenity-rs/serenity", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "unstable_discord_api", "cache"] }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-rspotify = { version = "0.12", features = ["cli"] }
-rusqlite = "0.30"
+rspotify = { version = "0.13", features = ["cli"] }
+rusqlite = { version = "0.30", features = ["chrono"] }
 regex = "1.6"
 anyhow = "1.0"
 serenity-command-derive = { version = "0.1.0", path = "../serenity-command-derive" }
 serenity-command = { version = "0.1.0", path = "../serenity-command" }
-reqwest = "0.11.14"
+reqwest = { version = "0.11.14", features = ["json"] }
 chrono = "0.4.24"
 futures = "0.3.27"
 image = "0.24.5"
 itertools = "0.12"
 serde = "1.0.156"
-rspotify-http = "0.12.0"
+rspotify-http = "0.13"
 tokio-stream = "0.1.12"
 scraper = "0.18.0"
 fallible-iterator = "0.3.0"
@@ -28,3 +28,10 @@ rand = "0.8.5"
 markov = "1.1.0"
 typemap_rev = "0.3.0"
 serde_urlencoded = "0.7.1"
+google-sheets4 = "4.0"
+yup-oauth2 = "7.0"
+urlencoding = "2.1"
+serde_json = "1.0"
+hyper = "0.14"
+hyper-tls = "0.5"
+serde_derive = "1.0"

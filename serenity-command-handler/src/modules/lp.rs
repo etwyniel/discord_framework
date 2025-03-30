@@ -15,6 +15,8 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
 use serenity::all::AutoArchiveDuration;
+use serenity::all::CreateAttachment;
+use serenity::all::CreateInteractionResponseMessage;
 use serenity::all::Message;
 use serenity::all::RoleId;
 use serenity::async_trait;
@@ -174,7 +176,10 @@ async fn build_message_contents(
             .unwrap_or_else(|| "Listening party: ".to_string()),
         when
     );
+    let mut add_sep = false;
     if let Some(duration) = info.duration {
+        add_sep = true;
+        resp_content.push('*');
         if duration.num_hours() > 0 {
             _ = write!(&mut resp_content, "{}h", duration.num_hours());
         }
@@ -186,9 +191,17 @@ async fn build_message_contents(
         if seconds < 60 {
             _ = write!(&mut resp_content, "{seconds}s");
         }
+        resp_content.push('*');
+    }
+    if let Some(release_date) = &info.release_date {
+        if add_sep {
+            resp_content.push_str(" | ");
+        }
+        add_sep = true;
+        _ = write!(&mut resp_content, "*{release_date}*");
     }
     if let Some(genres) = info.format_genres() {
-        if info.duration.is_some() {
+        if add_sep {
             resp_content.push_str(" | ");
         }
         _ = write!(&mut resp_content, "{}", &genres);
@@ -328,10 +341,18 @@ impl BotCommand for Lp {
             // prefix response with pinger mention
             let resp = format!("<@{}>: {resp_content}", command.user.id.get());
             // Create interaction response
+            let mut create_msg = CreateInteractionResponseMessage::new()
+                .content(resp)
+                .allowed_mentions(CreateAllowedMentions::new().roles(role_id));
+            if let Some(cover) = &info.cover {
+                let mut file = CreateAttachment::url(&ctx.http, cover).await?;
+                file.filename = "cover.jpg".to_string();
+                create_msg = create_msg.add_file(file);
+            }
             command
-                .respond(&ctx.http, CommandResponse::Public(resp.into()), role_id)
-                .await?
-                .unwrap()
+                .create_response(&ctx.http, CreateInteractionResponse::Message(create_msg))
+                .await?;
+            command.get_response(&ctx.http).await?
         };
         let mut response = format!(
             "LP created: {}",
@@ -403,7 +424,7 @@ impl BotCommand for SetCreateThreads {
         command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let guild_id = command.guild_id()?.get();
-        let mut db = handler.db.lock().await;
+        let db = handler.db.lock().await;
         db.set_guild_field(guild_id, "create_threads", self.create_threads)
             .context("updating 'create_threads' guild field")?;
         let resp = if self.create_threads {
@@ -433,7 +454,7 @@ impl BotCommand for SetRole {
     ) -> anyhow::Result<CommandResponse> {
         let guild_id = command.guild_id()?.get();
         let role = self.role.as_ref().map(|r| r.get().to_string());
-        let mut db = handler.db.lock().await;
+        let db = handler.db.lock().await;
         db.set_guild_field(guild_id, "role_id", &role)
             .context("updating 'role_id' guild field")?;
         let resp = if let Some(role_id) = role {
@@ -465,7 +486,7 @@ impl BotCommand for SetWebhook {
         command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let guild_id = command.guild_id()?.get();
-        let mut db = handler.db.lock().await;
+        let db = handler.db.lock().await;
         db.set_guild_field(guild_id, "webhook", self.webhook.as_ref())
             .context("updating 'webhook' guild field")?;
         let resp = if self.webhook.is_some() {
@@ -566,8 +587,8 @@ impl BotCommand for EditLp {
             .into_iter()
             .filter(|msg| msg.author.id == self_id)
             .find(|msg| {
-                if let Some(interation) = &msg.interaction {
-                    interation.user.id == author_id && interation.name == "lp"
+                if let Some(interaction) = &msg.interaction {
+                    interaction.user.id == author_id && interaction.name == "lp"
                 } else {
                     msg.content.contains(&author_id_str)
                 }

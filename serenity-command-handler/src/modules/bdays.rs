@@ -5,6 +5,7 @@ use anyhow::anyhow;
 use chrono::{Datelike, Local, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
 use rusqlite::params;
+use serenity::all::ChannelId;
 use serenity::builder::{CreateCommandOption, CreateEmbed, CreateEmbedAuthor};
 use serenity::http::Http;
 use serenity::model::prelude::CommandInteraction;
@@ -174,14 +175,24 @@ impl BotCommand for SetBday {
     }
 }
 
-async fn wish_bday(http: &Http, user_id: u64, guild_id: GuildId) -> anyhow::Result<()> {
+async fn wish_bday(
+    http: &Http,
+    user_id: u64,
+    guild_id: GuildId,
+    channel: Option<u64>,
+) -> anyhow::Result<()> {
     let member = guild_id.member(http, user_id).await?;
     let channels = guild_id.channels(http).await?;
-    let channel = channels
-        .values()
-        .find(|chan| chan.name() == "general")
-        .or_else(|| channels.values().find(|chan| chan.position == 0))
-        .ok_or_else(|| anyhow!("Could not find a suitable channel"))?;
+    let channel = if let Some(channel_id) = channel {
+        ChannelId::new(channel_id)
+    } else {
+        channels
+            .values()
+            .find(|chan| chan.name() == "general")
+            .or_else(|| channels.values().find(|chan| chan.position == 0))
+            .ok_or_else(|| anyhow!("Could not find a suitable channel"))?
+            .id
+    };
     channel
         .say(
             http,
@@ -213,7 +224,21 @@ pub async fn bday_loop(db: Arc<Mutex<Db>>, http: Arc<Http>) {
                 .collect::<Vec<_>>()
         };
         for (guild_id, user_id) in guilds_and_users {
-            if let Err(e) = wish_bday(http.as_ref(), user_id, GuildId::new(guild_id)).await {
+            let general_channel_id = {
+                db.lock()
+                    .await
+                    .get_guild_field(guild_id, "general_channel_id")
+                    .ok()
+                    .flatten()
+            };
+            if let Err(e) = wish_bday(
+                http.as_ref(),
+                user_id,
+                GuildId::new(guild_id),
+                general_channel_id,
+            )
+            .await
+            {
                 eprintln!("Error wishing user birthday: {e:?}");
             }
         }
@@ -240,6 +265,7 @@ impl Module for Bdays {
             )",
             [],
         )?;
+        db.add_guild_field("general_channel_id", "STRING")?;
         Ok(())
     }
 
