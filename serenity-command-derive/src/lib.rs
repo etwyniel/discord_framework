@@ -341,6 +341,14 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 fn guild(&self) -> Option<serenity::model::prelude::GuildId> {
                     #ident::GUILD
                 }
+
+                fn is_guild_command(&self) -> bool {
+                    #ident::GUILD_COMMAND
+                }
+
+                fn is_management(&self) -> bool {
+                    #ident::IS_MANAGEMENT_COMMAND
+                }
             }
 
         impl<'a> serenity_command::CommandBuilder<'a> for #ident {

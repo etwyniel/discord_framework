@@ -17,7 +17,7 @@ use rand::random;
 use regex::Regex;
 use rusqlite::{params, Error::SqliteFailure, ErrorCode};
 use serenity::{
-    all::{AutoArchiveDuration, CreateMessage, CreateThread, Http},
+    all::{AutoArchiveDuration, CreateAttachment, CreateMessage, CreateThread, Http},
     async_trait,
     builder::{
         CreateAutocompleteResponse, CreateCommandOption, CreateEmbed, CreateEmbedAuthor,
@@ -37,7 +37,7 @@ use serenity_command::{BotCommand, CommandKey, CommandResponse};
 use serenity_command_derive::Command;
 use tokio::time::interval;
 
-use crate::{command_context::get_str_opt_ac, db::Db, prelude::*};
+use crate::{command_context::get_str_opt_ac, db::Db, prelude::*, RegisterableModule};
 
 pub async fn message_to_quote_contents(
     _handler: &Handler,
@@ -97,6 +97,19 @@ pub async fn message_to_quote_contents(
     Ok(contents)
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum AttachmentType {
+    Image,
+    Video,
+    Audio,
+    Other,
+}
+
+pub struct Attachment {
+    pub ty: AttachmentType,
+    pub url: String,
+}
+
 pub struct Quote {
     pub quote_number: u64,
     pub guild_id: u64,
@@ -107,10 +120,11 @@ pub struct Quote {
     pub author_name: String,
     pub contents: String,
     pub image: Option<String>,
+    pub attachments: Vec<Attachment>,
 }
 
 pub fn fetch_quote(db: &Db, guild_id: u64, quote_number: u64) -> anyhow::Result<Option<Quote>> {
-    let res = db.conn.query_row(
+    let res = db.conn().query_row(
             "SELECT guild_id, channel_id, message_id, ts, author_id, author_name, contents, image FROM quote
      WHERE guild_id = ?1 AND quote_number = ?2",
             [guild_id, quote_number],
@@ -127,14 +141,40 @@ pub fn fetch_quote(db: &Db, guild_id: u64, quote_number: u64) -> anyhow::Result<
                     author_name: row.get(5)?,
                     contents: crate::db::column_as_string(row.get_ref(6)?)?,
                     image: row.get(7)?,
+                    attachments: vec![],
                 })
             },
         );
-    match res {
-        Ok(q) => Ok(Some(q)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e).context("Error fetching quote"),
+    let mut q = match res {
+        Ok(q) => q,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(e) => return Err(e).context("Error fetching quote"),
+    };
+    let mut qry = db.conn().prepare(
+        "SELECT type, url FROM quote_attachments WHERE guild_id = ?1 AND quote_number = ?2 ORDER BY ndx",
+    )?;
+    let attachments = qry.query_map([guild_id, quote_number], |row| {
+        let ty = match row
+            .get::<_, String>(0)?
+            .as_str()
+            .split_once("/")
+            .map(|(ty, _)| ty)
+            .unwrap_or_default()
+        {
+            "image" => AttachmentType::Image,
+            "video" => AttachmentType::Video,
+            "audio" => AttachmentType::Audio,
+            _ => AttachmentType::Other,
+        };
+        Ok(Attachment {
+            ty,
+            url: row.get(1)?,
+        })
+    })?;
+    for attachment in attachments {
+        q.attachments.push(attachment?);
     }
+    Ok(Some(q))
 }
 
 pub async fn add_quote(
@@ -145,7 +185,7 @@ pub async fn add_quote(
 ) -> anyhow::Result<Option<u64>> {
     let contents = message_to_quote_contents(handler, ctx, message).await?;
     let mut db = handler.db.lock().await;
-    let tx = db.conn.transaction()?;
+    let tx = db.conn_mut().transaction()?;
     let last_quote: u64 = tx
         .query_row(
             "SELECT quote_number FROM quote WHERE guild_id = ?1 ORDER BY quote_number DESC",
@@ -157,26 +197,21 @@ pub async fn add_quote(
     let ts = message.timestamp;
     let author_id = message.author.id.get();
     let author_name = &message.author.name;
-    let image = message
-        .attachments
-        .iter()
-        .find(|att| att.height.is_some())
-        .map(|att| att.url.clone());
+    let quote_number = last_quote + 1;
     match tx.execute(
         r"INSERT INTO quote (
     guild_id, channel_id, message_id, ts, quote_number,
-    author_id, author_name, contents, image
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    author_id, author_name, contents
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             guild_id,
             channel_id,
             message.id.get(),
             ts.unix_timestamp(),
-            last_quote + 1,
+            quote_number,
             author_id,
             author_name,
             contents.trim(),
-            image
         ],
     ) {
         Err(SqliteFailure(e, _)) if e.code == ErrorCode::ConstraintViolation => {
@@ -185,6 +220,18 @@ pub async fn add_quote(
         Ok(n) => Ok(Some(n)),
         Err(e) => Err(e),
     }?;
+    let attachments = message.attachments.iter().map(|att| {
+        (
+            att.content_type.as_deref().unwrap_or_default(),
+            att.url.as_str(),
+        )
+    });
+    for (ndx, (ty, url)) in attachments.enumerate() {
+        tx.execute(
+            "INSERT INTO quote_attachments (guild_id, quote_number, type, url, ndx) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![guild_id, quote_number, ty, url, ndx],
+        )?;
+    }
     tx.commit()?;
     Ok(Some(last_quote + 1))
 }
@@ -195,7 +242,7 @@ pub fn get_random_quote(
     user: Option<u64>,
 ) -> anyhow::Result<Option<Quote>> {
     let number = {
-        let mut stmt = db.conn.prepare(
+        let mut stmt = db.conn().prepare(
             "SELECT quote_number FROM quote WHERE guild_id = ?1 AND (?2 IS NULL OR author_id = ?2)",
         )?;
         let numbers: Vec<_> = stmt
@@ -246,7 +293,7 @@ pub async fn quotes_markov_chain(
     HashSet<CaseInsensitiveString>,
 )> {
     let db = handler.db.lock().await;
-    let mut stmt = db.conn.prepare(
+    let mut stmt = db.conn().prepare(
         "SELECT contents FROM quote WHERE guild_id = ?1 AND (?2 IS NULL or author_id = ?2)",
     )?;
     let mut chain = markov::Chain::of_order(order.unwrap_or(1));
@@ -290,7 +337,7 @@ pub async fn list_quotes(
     like: &str,
 ) -> anyhow::Result<Vec<(u64, String)>> {
     let db = handler.db.lock().await;
-    let res = db.conn.prepare(
+    let res = db.conn().prepare(
             "SELECT quote_number, contents FROM quote WHERE guild_id = ?1 AND contents LIKE '%'||?2||'%' LIMIT 15",
         )?
             .query(params![guild_id, like])?
@@ -420,10 +467,27 @@ impl GetQuote {
             .footer(CreateEmbedFooter::new(format!("in #{channel_name}")))
             .timestamp(model::Timestamp::parse(&quote.ts.format("%+").to_string()).unwrap());
 
+        let mut has_image = false;
         if let Some(image) = quote.image {
             create = create.image(image);
+            has_image = true;
         }
-        CommandResponse::public(create)
+        let mut attachments = vec![];
+        for att in &quote.attachments {
+            if att.ty == AttachmentType::Image && !has_image {
+                create = create.image(&att.url);
+                has_image = true;
+                continue;
+            }
+            attachments.push(att.url.clone());
+        }
+        Ok(CommandResponse::Public(
+            serenity_command::ResponseType::WithAttachments(
+                String::new(),
+                vec![create],
+                attachments,
+            ),
+        ))
     }
 }
 
@@ -553,12 +617,23 @@ pub async fn send_qotd(
         .footer(CreateEmbedFooter::new(format!("in #{channel_name}")))
         .timestamp(model::Timestamp::parse(&qotd.ts.format("%+").to_string()).unwrap());
 
+    let mut has_image = false;
     if let Some(image) = qotd.image {
         embed = embed.image(image);
+        has_image = true;
+    }
+    let mut attachments = vec![];
+    for att in &qotd.attachments {
+        if att.ty == AttachmentType::Image && !has_image {
+            embed = embed.image(&att.url);
+            has_image = true;
+            continue;
+        }
+        attachments.push(CreateAttachment::url(http, &att.url).await?);
     }
     let channel = ChannelId::new(channel_id);
     let msg = channel
-        .send_message(http, CreateMessage::new().embed(embed))
+        .send_message(http, CreateMessage::new().embed(embed).files(attachments))
         .await?;
     let thread_name = if qotd.contents.is_empty() {
         format!("Quote #{}", qotd.quote_number)
@@ -589,7 +664,7 @@ pub async fn qotd_loop(db: Arc<Mutex<Db>>, http: Arc<Http>) {
         let guilds_and_channels = {
             let db = db.lock().await;
             let mut stmt = db
-                .conn
+                .conn()
                 .prepare(
                     r"SELECT id, qotd_channel_id FROM guild
                          WHERE qotd_channel_id IS NOT NULL AND
@@ -651,12 +726,8 @@ impl Quotes {
 
 #[async_trait]
 impl Module for Quotes {
-    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Quotes)
-    }
-
     async fn setup(&mut self, db: &mut crate::db::Db) -> anyhow::Result<()> {
-        db.conn.execute(
+        db.conn().execute(
             "CREATE TABLE IF NOT EXISTS quote (
                 guild_id INTEGER,
                 channel_id INTEGER,
@@ -672,6 +743,17 @@ impl Module for Quotes {
             )",
             [],
         )?;
+        db.conn().execute(
+            "CREATE TABLE IF NOT EXISTS quote_attachments (
+                guild_id INTEGER,
+                quote_number INTEGER,
+                ndx INTEGER,
+                type STRING,
+                url STRING,
+                UNIQUE(guild_id, quote_number, ndx)
+            )",
+            [],
+        )?;
         db.add_guild_field("qotd_channel_id", "INTEGER")?;
         db.add_guild_field("qotd_last_sent", "STRING")?;
         Ok(())
@@ -682,5 +764,11 @@ impl Module for Quotes {
         store.register::<SaveQuote>();
         store.register::<FakeQuote>();
         completions.push(Quotes::complete_quotes);
+    }
+}
+
+impl RegisterableModule for Quotes {
+    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
+        Ok(Quotes)
     }
 }

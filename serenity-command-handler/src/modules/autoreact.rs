@@ -16,6 +16,7 @@ use crate::{
     command_context::{get_focused_option, get_str_opt_ac},
     db::Db,
     prelude::*,
+    RegisterableModule,
 };
 use serenity_command::{BotCommand, CommandKey, CommandResponse};
 use serenity_command_derive::Command;
@@ -95,7 +96,7 @@ impl BotCommand for AddAutoreact {
         let parsed = AutoReact::new(&trigger, &self.emote)?;
         {
             let db = handler.db.lock().await;
-            db.conn.execute(
+            db.conn().execute(
                 "INSERT INTO autoreact (guild_id, trigger, emote) VALUES (?1, ?2, ?3)",
                 params![guild_id, &trigger, &self.emote],
             )?;
@@ -141,7 +142,7 @@ impl BotCommand for RemoveAutoreact {
             .get();
         {
             let db = handler.db.lock().await;
-            db.conn.execute(
+            db.conn().execute(
                 "DELETE FROM autoreact WHERE guild_id = ?1 AND trigger = ?2 AND emote = ?3",
                 params![guild_id, &trigger, self.emote],
             )?;
@@ -165,7 +166,7 @@ impl Handler {
     ) -> anyhow::Result<Vec<(String, String)>> {
         let db = self.db.lock().await;
         let res = db
-            .conn
+            .conn()
             .prepare(
                 "SELECT trigger, emote FROM autoreact WHERE
                      guild_id = ?1 AND trigger LIKE '%'||?2||'%' AND emote LIKE '%'||?3||'%'
@@ -236,7 +237,7 @@ impl ModAutoreacts {
     ) -> anyhow::Result<Vec<(String, String)>> {
         let db = handler.db.lock().await;
         let res = db
-            .conn
+            .conn()
             .prepare(
                 "SELECT trigger, emote FROM autoreact WHERE
                      guild_id = ?1 AND trigger LIKE '%'||?2||'%' AND emote LIKE '%'||?3||'%'
@@ -295,7 +296,7 @@ pub async fn add_reacts(handler: &Handler, ctx: &Context, msg: Message) -> anyho
 impl ModAutoreacts {
     pub async fn load_reacts(&self, db: &mut Db) -> anyhow::Result<()> {
         let cache = {
-            db.conn
+            db.conn()
                 .prepare("SELECT guild_id, trigger, emote FROM autoreact")?
                 .query([])?
                 .map(|row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
@@ -317,12 +318,8 @@ impl ModAutoreacts {
 
 #[async_trait]
 impl Module for ModAutoreacts {
-    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Default::default())
-    }
-
     async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
-        db.conn.execute(
+        db.conn().execute(
             "CREATE TABLE IF NOT EXISTS autoreact (
                 guild_id INTEGER NOT NULL,
                 trigger STRING NOT NULL,
@@ -338,5 +335,11 @@ impl Module for ModAutoreacts {
         commands.register::<RemoveAutoreact>();
 
         completions.push(ModAutoreacts::complete_reacts);
+    }
+}
+
+impl RegisterableModule for ModAutoreacts {
+    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
+        Ok(Default::default())
     }
 }

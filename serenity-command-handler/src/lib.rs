@@ -2,6 +2,7 @@ use std::fmt::Write;
 use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, bail};
+use bot_management::ModManagement;
 use rusqlite::Connection;
 use serenity::model::prelude::{GuildId, UserId};
 use serenity::{
@@ -18,11 +19,11 @@ use tokio::sync::OnceCell;
 use serenity_command::{CommandKey, CommandResponse};
 
 pub mod album;
+pub mod bot_management;
 pub mod command_context;
 pub mod db;
-pub mod modules;
-
 pub mod events;
+pub mod modules;
 
 use db::Db;
 
@@ -81,8 +82,8 @@ impl ModuleMap {
             .map(Arc::clone)
     }
 
-    fn add<M: Module>(&mut self, m: M) {
-        self.0.insert::<KeyWrapper<M>>(Arc::new(m));
+    fn add<M: Module>(&mut self, m: Arc<M>) {
+        self.0.insert::<KeyWrapper<M>>(m);
     }
 
     fn contains<M: Module>(&self) -> bool {
@@ -103,9 +104,11 @@ impl InteractionExt for CommandInteraction {
 
 pub struct Handler {
     pub db: Arc<Mutex<Db>>,
+    pub management_guild: GuildId,
     pub commands: RwLock<CommandStore>,
     pub http: OnceCell<Arc<Http>>,
     pub modules: ModuleMap,
+    pub module_list: Vec<Arc<dyn Module>>,
     pub special_commands: HashMap<String, SpecialCommand>,
     pub completion_handlers: CompletionStore,
     pub default_command_handler: Option<SpecialCommand>,
@@ -114,17 +117,22 @@ pub struct Handler {
 }
 
 impl Handler {
-    pub fn builder(conn: Connection) -> HandlerBuilder {
-        let db = Db { conn };
-        HandlerBuilder {
+    pub async fn builder(conn: Connection, management_guild: GuildId) -> HandlerBuilder {
+        let db = Db::new(conn).unwrap();
+        let mut builder = HandlerBuilder {
             db,
+            management_guild,
             commands: Default::default(),
             modules: Default::default(),
+            module_list: Default::default(),
             special_commands: Default::default(),
             completion_handlers: Default::default(),
             default_command_handler: None,
             event_handlers: events::EventHandlers::default(),
-        }
+        };
+        // register default module(s)
+        builder = builder.module::<ModManagement>().await.unwrap();
+        builder
     }
 
     pub fn module<M: Module>(&self) -> anyhow::Result<&M> {
@@ -209,8 +217,10 @@ impl Handler {
 
 pub struct HandlerBuilder {
     pub db: Db,
+    pub management_guild: GuildId,
     pub commands: CommandStore,
     pub modules: ModuleMap,
+    pub module_list: Vec<Arc<dyn Module>>,
     pub special_commands: HashMap<String, SpecialCommand>,
     pub completion_handlers: CompletionStore,
     pub default_command_handler: Option<SpecialCommand>,
@@ -218,7 +228,7 @@ pub struct HandlerBuilder {
 }
 
 impl HandlerBuilder {
-    pub async fn module<M: Module>(mut self) -> anyhow::Result<Self> {
+    pub async fn module<M: RegisterableModule>(mut self) -> anyhow::Result<Self> {
         if self.modules.contains::<M>() {
             return Ok(self);
         }
@@ -227,11 +237,13 @@ impl HandlerBuilder {
         m.setup(&mut self.db).await?;
         m.register_commands(&mut self.commands, &mut self.completion_handlers);
         m.register_event_handlers(&mut self.event_handlers);
-        self.modules.add(m);
+        let module = m.into();
+        self.modules.add(Arc::clone(&module));
+        self.module_list.push(module.as_trait());
         Ok(self)
     }
 
-    pub async fn with_module<M: Module>(mut self, mut m: M) -> anyhow::Result<Self> {
+    pub async fn with_module<M: RegisterableModule>(mut self, mut m: M) -> anyhow::Result<Self> {
         if self.modules.contains::<M>() {
             return Ok(self);
         }
@@ -239,7 +251,9 @@ impl HandlerBuilder {
         m.setup(&mut self.db).await?;
         m.register_commands(&mut self.commands, &mut self.completion_handlers);
         m.register_event_handlers(&mut self.event_handlers);
-        self.modules.add(m);
+        let module = Arc::new(m);
+        self.modules.add(Arc::clone(&module));
+        self.module_list.push(module.as_trait());
         Ok(self)
     }
 
@@ -251,8 +265,10 @@ impl HandlerBuilder {
     pub fn build(self) -> Handler {
         let HandlerBuilder {
             db,
+            management_guild,
             commands,
             modules,
+            module_list,
             special_commands,
             completion_handlers,
             default_command_handler,
@@ -260,9 +276,11 @@ impl HandlerBuilder {
         } = self;
         Handler {
             db: Arc::new(Mutex::new(db)),
+            management_guild,
             commands: RwLock::new(commands),
             http: OnceCell::new(),
             modules,
+            module_list,
             special_commands,
             completion_handlers,
             default_command_handler,
@@ -273,11 +291,7 @@ impl HandlerBuilder {
 }
 
 #[async_trait]
-pub trait Module: 'static + Send + Sync + Sized {
-    async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {
-        Ok(builder)
-    }
-    async fn init(m: &ModuleMap) -> anyhow::Result<Self>;
+pub trait Module: 'static + Send + Sync {
     async fn setup(&mut self, _db: &mut Db) -> anyhow::Result<()> {
         Ok(())
     }
@@ -290,7 +304,22 @@ pub trait Module: 'static + Send + Sync + Sized {
 
     fn register_event_handlers(&self, _handlers: &mut events::EventHandlers) {}
 
-    const AUTOCOMPLETES: &'static [&'static str] = &[];
+    fn autocompletes(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait RegisterableModule: Module + Sized {
+    async fn init(m: &ModuleMap) -> anyhow::Result<Self>;
+
+    async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {
+        Ok(builder)
+    }
+
+    fn as_trait(self: Arc<Self>) -> Arc<dyn Module> {
+        self
+    }
 }
 
 pub trait ModuleKey {

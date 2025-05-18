@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 use std::ops::Add;
 
+use crate::RegisterableModule;
 use crate::{db::Db, CommandStore, HandlerBuilder, Module};
 use anyhow::anyhow;
 use anyhow::bail;
@@ -702,22 +703,6 @@ impl ModLp {
 
 #[async_trait]
 impl Module for ModLp {
-    async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {
-        builder
-            .module::<Lastfm>()
-            .await?
-            .module::<Spotify>()
-            .await?
-            .module::<Bandcamp>()
-            .await?
-            .module::<AlbumLookup>()
-            .await
-    }
-
-    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(ModLp)
-    }
-
     async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
         db.add_guild_field("create_threads", "BOOLEAN NOT NULL DEFAULT(false)")?;
         db.add_guild_field("webhook", "STRING")?;
@@ -732,5 +717,23 @@ impl Module for ModLp {
         store.register::<SetWebhook>();
         store.register::<EditLp>();
         completions.push(ModLp::complete_lp);
+    }
+}
+
+impl RegisterableModule for ModLp {
+    async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {
+        builder
+            .module::<Lastfm>()
+            .await?
+            .module::<Spotify>()
+            .await?
+            .module::<Bandcamp>()
+            .await?
+            .module::<AlbumLookup>()
+            .await
+    }
+
+    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
+        Ok(ModLp)
     }
 }

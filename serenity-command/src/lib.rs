@@ -45,6 +45,8 @@ pub trait BotCommand {
 
     const PERMISSIONS: Permissions = Permissions::empty();
     const GUILD: Option<GuildId> = None;
+    const GUILD_COMMAND: bool = false;
+    const IS_MANAGEMENT_COMMAND: bool = false;
 }
 
 pub trait CommandBuilder<'a>: BotCommand + From<&'a CommandData> + 'static {
@@ -71,5 +73,13 @@ pub trait CommandRunner<T> {
 
     fn guild(&self) -> Option<GuildId> {
         None
+    }
+
+    fn is_guild_command(&self) -> bool {
+        false
+    }
+
+    fn is_management(&self) -> bool {
+        false
     }
 }

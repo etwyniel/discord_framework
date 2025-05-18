@@ -16,7 +16,7 @@ use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
 use std::fmt::Write;
 
-use crate::prelude::*;
+use crate::{prelude::*, RegisterableModule};
 
 const MAX_EMBEDS: usize = 10;
 
@@ -135,7 +135,7 @@ async fn load_allowed_channels(
 ) -> anyhow::Result<Vec<ChannelId>> {
     let db = handler.db.lock().await;
     let mut stmt = db
-        .conn
+        .conn()
         .prepare("SELECT channel_id FROM pinboard_allowed_channels WHERE guild_id = ?1")?;
     let channels: Vec<_> = stmt
         .query([guild_id.get()])?
@@ -340,7 +340,7 @@ impl BotCommand for RegisterChannel {
             bail!("Must be run in a guild")
         };
         let db = data.db.lock().await;
-        db.conn.execute(
+        db.conn().execute(
             "INSERT INTO pinboard_allowed_channels (guild_id, channel_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
             [guild_id.get(), interaction.channel_id.get()])?;
         CommandResponse::private(format!(
@@ -369,7 +369,7 @@ impl BotCommand for UnregisterChannel {
             bail!("Must be run in a guild")
         };
         let db = data.db.lock().await;
-        db.conn.execute(
+        db.conn().execute(
             "DELETE FROM pinboard_allowed_channels WHERE guild_id = ?1 AND channel_id = ?2",
             [guild_id.get(), interaction.channel_id.get()],
         )?;
@@ -416,13 +416,9 @@ impl BotCommand for ListChannels {
 
 #[async_trait]
 impl Module for Pinboard {
-    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Pinboard)
-    }
-
     async fn setup(&mut self, db: &mut crate::db::Db) -> anyhow::Result<()> {
         db.add_guild_field("pinboard_webhook", "STRING")?;
-        db.conn.execute(
+        db.conn().execute(
             "CREATE TABLE IF NOT EXISTS pinboard_allowed_channels (
                 guild_id INTEGER NOT NULL,
                 channel_id INTEGER NOT NULL,
@@ -443,5 +439,11 @@ impl Module for Pinboard {
         store.register::<RegisterChannel>();
         store.register::<UnregisterChannel>();
         store.register::<ListChannels>();
+    }
+}
+
+impl RegisterableModule for Pinboard {
+    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
+        Ok(Pinboard)
     }
 }

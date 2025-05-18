@@ -4,16 +4,38 @@ use rusqlite::{
     types::{FromSql, ValueRef},
     Connection, ToSql,
 };
+use serenity::all::GuildId;
 
 use std::borrow::Cow;
 
 use crate::Handler;
 
 pub struct Db {
-    pub conn: Connection,
+    conn: Connection,
 }
 
 impl Db {
+    pub fn new(conn: Connection) -> anyhow::Result<Db> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS guild(id INTEGER PRIMARY KEY)",
+            [],
+        )
+        .map_err(anyhow::Error::from)?;
+
+        conn.execute("CREATE TABLE IF NOT EXISTS enabled_guild_commands (guild_id INTEGER, command_name STRING)", [])
+            .map_err(anyhow::Error::from)?;
+
+        Ok(Db { conn })
+    }
+
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    pub fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+
     pub fn get_guild_field<T: FromSql + Default>(
         &self,
         guild_id: u64,
@@ -62,6 +84,43 @@ impl Db {
             .execute(&format!("ALTER TABLE guild ADD COLUMN {name} {def}"), [])
             .map_err(anyhow::Error::from)?;
         Ok(())
+    }
+
+    pub fn set_command_enabled_for_guild(
+        &mut self,
+        command_name: &str,
+        guild_id: GuildId,
+        enable: bool,
+    ) -> anyhow::Result<()> {
+        if enable {
+            self.conn
+                .execute(
+                    "INSERT INTO enabled_guild_commands (guild_id, command_name) VALUES  (?1, ?2)",
+                    params![guild_id.get(), command_name],
+                )
+                .map_err(anyhow::Error::from)
+        } else {
+            self.conn
+                .execute(
+                    "DELETE FROM enabled_guild_commands WHERE guild_id = ?1 AND command_name = ?2",
+                    params![guild_id.get(), command_name],
+                )
+                .map_err(anyhow::Error::from)
+        }?;
+        Ok(())
+    }
+
+    pub fn get_command_enabled_guilds(&mut self, command_name: &str) -> Vec<GuildId> {
+        let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT guild_id FROM enabled_guild_commands WHERE command_name = ?1")
+        else {
+            return vec![];
+        };
+        let Ok(res) = stmt.query_map([command_name], |row| Ok(GuildId::new(row.get(0)?))) else {
+            return vec![];
+        };
+        res.filter_map(|row| row.ok()).collect()
     }
 }
 

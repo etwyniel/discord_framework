@@ -1,4 +1,4 @@
-use crate::{Module, ModuleMap};
+use crate::{Module, ModuleMap, RegisterableModule};
 use anyhow::anyhow;
 use reqwest::{Client, Url};
 use scraper::{Html, Selector};
@@ -142,7 +142,9 @@ impl Default for Bandcamp {
 }
 
 #[async_trait]
-impl Module for Bandcamp {
+impl Module for Bandcamp {}
+
+impl RegisterableModule for Bandcamp {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
         Ok(Bandcamp::new())
     }

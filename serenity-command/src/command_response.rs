@@ -5,6 +5,7 @@ pub enum ResponseType {
     Text(String),
     Embed(Box<CreateEmbed>),
     Mixed(String, Vec<CreateEmbed>),
+    WithAttachments(String, Vec<CreateEmbed>, Vec<String>),
 }
 
 impl From<String> for ResponseType {
@@ -45,11 +46,18 @@ pub enum CommandResponse {
 }
 
 impl ResponseType {
-    pub fn to_content(self) -> (Option<String>, Option<Vec<CreateEmbed>>) {
+    pub fn to_content(
+        self,
+    ) -> (
+        Option<String>,
+        Option<Vec<CreateEmbed>>,
+        Option<Vec<String>>,
+    ) {
         match self {
-            ResponseType::Text(s) => (Some(s), None),
-            ResponseType::Embed(e) => (None, Some(vec![*e])),
-            ResponseType::Mixed(s, e) => (Some(s), Some(e)),
+            ResponseType::Text(s) => (Some(s), None, None),
+            ResponseType::Embed(e) => (None, Some(vec![*e]), None),
+            ResponseType::Mixed(s, e) => (Some(s), Some(e), None),
+            ResponseType::WithAttachments(s, e, a) => (Some(s), Some(e), Some(a)),
         }
     }
 }
@@ -57,22 +65,29 @@ impl ResponseType {
 impl CommandResponse {
     pub fn to_contents_and_flags(
         self,
-    ) -> Option<(String, Option<Vec<CreateEmbed>>, InteractionResponseFlags)> {
+    ) -> Option<(
+        String,
+        Option<Vec<CreateEmbed>>,
+        Option<Vec<String>>,
+        InteractionResponseFlags,
+    )> {
         Some(match self {
             CommandResponse::None => return None,
             CommandResponse::Public(resp) => {
-                let (text, embeds) = resp.to_content();
+                let (text, embeds, attachments) = resp.to_content();
                 (
                     text.unwrap_or_default(),
                     embeds,
+                    attachments,
                     InteractionResponseFlags::empty(),
                 )
             }
             CommandResponse::Private(resp) => {
-                let (text, embeds) = resp.to_content();
+                let (text, embeds, attachments) = resp.to_content();
                 (
                     text.unwrap_or_default(),
                     embeds,
+                    attachments,
                     InteractionResponseFlags::EPHEMERAL,
                 )
             }

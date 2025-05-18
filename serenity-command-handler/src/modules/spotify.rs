@@ -1,6 +1,10 @@
-use std::{borrow::Cow, collections::HashSet, sync::atomic::AtomicU64};
+use std::{
+    borrow::Cow,
+    collections::HashSet,
+    sync::{atomic::AtomicU64, LazyLock},
+};
 
-use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap};
+use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule};
 use anyhow::{anyhow, bail, Context as _};
 use regex::Regex;
 use reqwest::redirect::Policy;
@@ -10,12 +14,17 @@ use rspotify::{
         AlbumId, FullEpisode, FullTrack, Id, PlayableItem, PlaylistId, SearchType,
         SimplifiedArtist, TrackId,
     },
-    AuthCodeSpotify, ClientCredsSpotify, Config, Credentials,
+    scopes, AuthCodeSpotify, ClientCredsSpotify, Config, Credentials,
 };
 use serenity::{
+    all::{
+        CreateActionRow, CreateButton, CreateInteractionResponse, CreateInteractionResponseMessage,
+    },
     async_trait,
-    model::prelude::CommandInteraction,
-    model::{channel::Message, prelude::Reaction},
+    model::{
+        channel::Message,
+        prelude::{CommandInteraction, Reaction},
+    },
 };
 use serenity::{http::Http, model::prelude::ReactionType, prelude::*};
 use serenity_command::{BotCommand, CommandResponse};
@@ -23,14 +32,18 @@ use serenity_command_derive::Command;
 
 use crate::album::{Album, AlbumProvider};
 
-const ALBUM_URL_START: &str = "https://open.spotify.com/album/";
-const PLAYLIST_URL_START: &str = "https://open.spotify.com/playlist/";
-const TRACK_URL_START: &str = "https://open.spotify.com/track/";
+const SPOTIFY_URL_PATTERN: &str =
+    r"https://open.spotify.com/(intl-.{2}/)?(track|album|playlist)/(\w+)(\?.*)?";
 const SHORTENED_URL_START: &str = "https://spotify.link/";
 
 const CACHE_PATH: &str = "rspotify_cache";
 
 const UNLINK_REACT: &str = "🔗";
+
+const INTERACTION_AUTH_PROMPT: &str = "spotify-oauth-prompt";
+
+static SPOTIFY_URL_MATCHER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(SPOTIFY_URL_PATTERN).unwrap());
 
 pub struct Spotify<C: BaseClient> {
     // client: ClientCredsSpotify,
@@ -117,12 +130,15 @@ impl<C: BaseClient> Spotify<C> {
             let location = resolve_redirect(url.as_ref()).await?;
             url = Cow::Owned(location);
         }
-        if let Some(id) = url.strip_prefix(TRACK_URL_START) {
-            self.get_song_from_id(id.split('?').next().unwrap()).await
-        } else if url.starts_with(ALBUM_URL_START) {
-            bail!("Expected a spotify track URL, got an album URL")
-        } else {
-            bail!("Invalid spotify URL")
+        let Some(captures) = SPOTIFY_URL_MATCHER.captures(&url) else {
+            bail!("Invalid Spotify URL");
+        };
+        match captures.get(2).map(|m| m.as_str()) {
+            Some("track") => {
+                self.get_song_from_id(captures.get(3).unwrap().as_str())
+                    .await
+            }
+            _ => bail!("Expected a Spotify track URL"),
         }
     }
 
@@ -154,20 +170,19 @@ impl<C: BaseClient> AlbumProvider for Spotify<C> {
             let location = resolve_redirect(url.as_ref()).await?;
             url = Cow::Owned(location);
         }
-        if let Some(id) = url.strip_prefix(ALBUM_URL_START) {
-            self.get_album_from_id(id.split('?').next().unwrap()).await
-        } else if let Some(id) = url.strip_prefix(PLAYLIST_URL_START) {
-            self.get_playlist_from_id(id.split('?').next().unwrap())
-                .await
-        } else {
-            bail!("Invalid spotify url")
+        let Some(captures) = Regex::new(SPOTIFY_URL_PATTERN).unwrap().captures(&url) else {
+            bail!("Invalid Spotify URL");
+        };
+        let id = captures.get(3).unwrap().as_str();
+        match captures.get(2).map(|m| m.as_str()) {
+            Some("album") => self.get_album_from_id(id).await,
+            Some("playlist") => self.get_playlist_from_id(id).await,
+            _ => bail!("Expected a Spotify album/playlist URL"),
         }
     }
 
     fn url_matches(&self, url: &str) -> bool {
-        url.starts_with(ALBUM_URL_START)
-            || url.starts_with(PLAYLIST_URL_START)
-            || url.starts_with(SHORTENED_URL_START)
+        SPOTIFY_URL_MATCHER.is_match(url) || url.starts_with(SHORTENED_URL_START)
     }
 
     async fn query_album(&self, query: &str) -> anyhow::Result<Album> {
@@ -262,6 +277,7 @@ impl<C: BaseClient> Spotify<C> {
             .items
             .into_iter()
             .map(|a| {
+                //dbg!(a.available_markets.len());
                 (
                     format!(
                         "{} - {}",
@@ -320,17 +336,68 @@ impl Spotify<AuthCodeSpotify> {
 }
 
 #[derive(Command)]
+#[cmd(name = "spotify_authenticate", desc = "Authenticate Spotify user")]
+pub struct SpotifyAuthenticate;
+
+#[async_trait]
+impl BotCommand for SpotifyAuthenticate {
+    type Data = Handler;
+
+    async fn run(
+        self,
+        _: &Handler,
+        ctx: &Context,
+        interaction: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let scopes = scopes!(
+            "playlist-modify-public",
+            "playlist-read-private",
+            "playlist-read-collaborative",
+            "user-library-read",
+            "user-read-private",
+            "playlist-modify-private"
+        );
+        let creds = Credentials::from_env().ok_or_else(|| anyhow!("No spotify credentials"))?;
+        let oauth =
+            rspotify::OAuth::from_env(scopes).ok_or_else(|| anyhow!("No oauth information"))?;
+        let mut client = AuthCodeSpotify::new(creds, oauth);
+        client.config.token_cached = true;
+        client.config.cache_path = CACHE_PATH.into();
+        let url = client
+            .get_authorize_url(false)
+            .context("failed to generate authorization url")?;
+        interaction
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(format!("authentication URL: {url}"))
+                        .components(vec![CreateActionRow::Buttons(vec![CreateButton::new(
+                            INTERACTION_AUTH_PROMPT,
+                        )
+                        .label("Submit token")])]),
+                ),
+            )
+            .await?;
+        Ok(CommandResponse::None)
+    }
+}
+
+#[derive(Command)]
 #[cmd(name = "unlink", message, desc = "Resolve a spotify.link URL")]
 pub struct Unlink(Message);
 
 #[async_trait]
 impl Module for Spotify<ClientCredsSpotify> {
-    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Spotify::new().await
-    }
-
     fn register_commands(&self, store: &mut CommandStore, _: &mut CompletionStore) {
         store.register::<Unlink>();
+    }
+}
+
+impl RegisterableModule for Spotify<ClientCredsSpotify> {
+    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
+        Spotify::new().await
     }
 }
 
@@ -429,6 +496,44 @@ impl BotCommand for Unlink {
 
 #[async_trait]
 impl Module for Spotify<AuthCodeSpotify> {
+    async fn setup(&mut self, db: &mut crate::db::Db) -> anyhow::Result<()> {
+        db.add_guild_field("spotify_user_id", "STRING")
+    }
+
+    fn register_commands(&self, store: &mut CommandStore, _: &mut CompletionStore) {
+        store.register::<SpotifyAuthenticate>();
+    }
+    //
+    // async fn handle_component_interaction(
+    //     &self,
+    //     handler: &Handler,
+    //     ctx: &Context,
+    //     interaction: &ComponentInteraction,
+    // ) -> Option<anyhow::Result<()>> {
+    //     if interaction.data.custom_id != INTERACTION_AUTH_PROMPT {
+    //         return None;
+    //     }
+    //
+    //     Some(
+    //         interaction
+    //             .create_response(
+    //                 &ctx.http,
+    //                 CreateInteractionResponse::Modal(
+    //                     CreateModal::new("spotify-auth-submit", "Spotify Authentication")
+    //                         .components(vec![CreateActionRow::InputText(CreateInputText::new(
+    //                             InputTextStyle::Short,
+    //                             "Redirection URL",
+    //                             "spotify-auth-token",
+    //                         ))]),
+    //                 ),
+    //             )
+    //             .await
+    //             .map_err(|err| err.into()),
+    //     )
+    // }
+}
+
+impl RegisterableModule for Spotify<AuthCodeSpotify> {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
         Err(anyhow!(
             "Must be initialized with new_auth_code and added using with_module"

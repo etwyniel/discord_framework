@@ -9,7 +9,9 @@ use std::sync::Arc;
 use crate::album::{Album, AlbumProvider};
 use crate::db::Db;
 use crate::modules::{Bandcamp, Lastfm, Spotify};
-use crate::{CommandStore, CompletionStore, Handler, HandlerBuilder, Module, ModuleMap};
+use crate::{
+    CommandStore, CompletionStore, Handler, HandlerBuilder, Module, ModuleMap, RegisterableModule,
+};
 
 use anyhow::bail;
 
@@ -116,6 +118,18 @@ impl AlbumLookup {
 
 #[async_trait]
 impl Module for AlbumLookup {
+    async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
+        db.add_guild_field("create_threads", "BOOLEAN NOT NULL DEFAULT(true)")?;
+        db.add_guild_field("webhook", "STRING")?;
+        Ok(())
+    }
+
+    fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
+        store.register::<LookupAlbum>();
+    }
+}
+
+impl RegisterableModule for AlbumLookup {
     async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {
         builder
             .module::<Lastfm>()
@@ -130,15 +144,5 @@ impl Module for AlbumLookup {
         Ok(AlbumLookup {
             providers: vec![m.module_arc::<Spotify>()?, m.module_arc::<Bandcamp>()?],
         })
-    }
-
-    async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
-        db.add_guild_field("create_threads", "BOOLEAN NOT NULL DEFAULT(true)")?;
-        db.add_guild_field("webhook", "STRING")?;
-        Ok(())
-    }
-
-    fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
-        store.register::<LookupAlbum>();
     }
 }

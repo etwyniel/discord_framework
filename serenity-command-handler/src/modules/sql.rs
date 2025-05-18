@@ -9,7 +9,9 @@ use serenity::{
 use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
 
-use crate::{db::Db, CommandStore, CompletionStore, Handler, Module, ModuleMap};
+use crate::{
+    db::Db, CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule,
+};
 
 #[derive(Command)]
 #[cmd(name = "query", desc = "Query the database (admin-only)")]
@@ -93,7 +95,7 @@ impl BotCommand for Query {
         cmd: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
         let db = handler.db.lock().await;
-        self.query(&db.conn, cmd.user.id, true)
+        self.query(db.conn(), cmd.user.id, true)
     }
 }
 
@@ -101,12 +103,8 @@ pub struct Sql;
 
 #[async_trait]
 impl Module for Sql {
-    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Sql)
-    }
-
     async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
-        db.conn.execute(
+        db.conn().execute(
             "CREATE TABLE IF NOT EXISTS admin (id INTEGER PRIMARY KEY)",
             [],
         )?;
@@ -115,5 +113,11 @@ impl Module for Sql {
 
     fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
         store.register::<Query>();
+    }
+}
+
+impl RegisterableModule for Sql {
+    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
+        Ok(Sql)
     }
 }

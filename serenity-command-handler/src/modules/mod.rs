@@ -30,3 +30,13 @@ pub use album_lookup::AlbumLookup;
 pub mod bdays;
 
 pub mod sql;
+
+pub mod forms;
+pub use forms::Forms;
+
+pub mod playlist_builder;
+pub use playlist_builder::PlaylistBuilder;
+
+pub mod complete;
+
+pub mod spotify_activity;

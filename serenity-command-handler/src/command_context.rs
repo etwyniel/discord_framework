@@ -1,4 +1,5 @@
 use serenity::{
+    all::CreateAttachment,
     async_trait,
     builder::{CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage},
     http::Http,
@@ -28,7 +29,7 @@ impl Responder for CommandInteraction {
         contents: CommandResponse,
         role_id: Option<u64>,
     ) -> anyhow::Result<Option<Message>> {
-        let (contents, embeds, flags) = match contents.to_contents_and_flags() {
+        let (contents, embeds, attachments, flags) = match contents.to_contents_and_flags() {
             None => return Ok(None),
             Some(c) => c,
         };
@@ -42,6 +43,9 @@ impl Responder for CommandInteraction {
                 .content(&contents)
                 .flags(flags)
                 .allowed_mentions(CreateAllowedMentions::new().roles(role_id));
+            for att in attachments.iter().flatten() {
+                msg = msg.add_file(CreateAttachment::url(http, &att).await?);
+            }
             CreateInteractionResponse::Message(msg)
         })
         .await?;

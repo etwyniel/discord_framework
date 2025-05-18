@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use tokio::time::interval;
 
 use crate::db::Db;
-use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap};
+use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule};
 
 pub struct Birthday {
     pub user_id: u64,
@@ -35,7 +35,7 @@ async fn add_birthday(
     year: Option<u16>,
 ) -> anyhow::Result<()> {
     let db = handler.db.lock().await;
-    db.conn.execute(
+    db.conn().execute(
         "INSERT INTO bdays (guild_id, user_id, day, month, year)
                  VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(guild_id, user_id) DO UPDATE
@@ -49,7 +49,7 @@ async fn add_birthday(
 async fn get_bdays(handler: &Handler, guild_id: u64) -> anyhow::Result<Vec<Birthday>> {
     let db = handler.db.lock().await;
     let res = db
-        .conn
+        .conn()
         .prepare("SELECT user_id, day, month, year FROM bdays WHERE guild_id = ?1")?
         .query([guild_id])?
         .map(|row| {
@@ -213,7 +213,7 @@ pub async fn bday_loop(db: Arc<Mutex<Db>>, http: Arc<Http>) {
         let guilds_and_users = {
             let db = db.lock().await;
             let mut stmt = db
-                .conn
+                .conn()
                 .prepare("SELECT guild_id, user_id FROM bdays WHERE day = ?1 AND month = ?2")
                 .unwrap();
             stmt.query([now.day(), now.month()])
@@ -249,12 +249,8 @@ pub struct Bdays;
 
 #[async_trait]
 impl Module for Bdays {
-    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Bdays)
-    }
-
     async fn setup(&mut self, db: &mut crate::db::Db) -> anyhow::Result<()> {
-        db.conn.execute(
+        db.conn().execute(
             "CREATE TABLE IF NOT EXISTS bdays (
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
@@ -272,5 +268,11 @@ impl Module for Bdays {
     fn register_commands(&self, store: &mut CommandStore, _: &mut CompletionStore) {
         store.register::<GetBdays>();
         store.register::<SetBday>();
+    }
+}
+
+impl RegisterableModule for Bdays {
+    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
+        Ok(Bdays)
     }
 }

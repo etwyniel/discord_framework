@@ -36,7 +36,7 @@ use std::time::Duration;
 use crate::command_context::{get_focused_option, get_str_opt_ac};
 use crate::db::Db;
 use crate::modules::Spotify;
-use crate::prelude::*;
+use crate::{prelude::*, RegisterableModule};
 use serenity_command_derive::Command;
 
 const API_ENDPOINT: &str = "http://ws.audioscrobbler.com/2.0/";
@@ -942,7 +942,7 @@ pub async fn get_release_years<'a, I: IntoIterator<Item = (&'a str, &'a str, usi
         AND albums_in.album = album_cache.album",
     );
     let db = db.lock().await;
-    let mut stmt = db.conn.prepare(&query)?;
+    let mut stmt = db.conn().prepare(&query)?;
     let res = stmt
         .query([])?
         .map(|row| {
@@ -962,21 +962,21 @@ async fn set_release_year(
     year: u64,
 ) -> anyhow::Result<()> {
     let db = db.lock().await;
-    db.conn.execute("INSERT INTO album_cache (artist, album, year) VALUES (lower(?1), lower(?2), ?3) ON CONFLICT(artist, album) DO NOTHING",
+    db.conn().execute("INSERT INTO album_cache (artist, album, year) VALUES (lower(?1), lower(?2), ?3) ON CONFLICT(artist, album) DO NOTHING",
     params![artist, album, year])?;
     Ok(())
 }
 
 async fn set_last_checked(db: &Mutex<Db>, artist: &str, album: &str) -> anyhow::Result<()> {
     let db = db.lock().await;
-    db.conn.execute("INSERT INTO album_cache (artist, album, last_checked) VALUES (?1, ?2, ?3) ON CONFLICT(artist, album) DO UPDATE SET last_checked = ?3",
+    db.conn().execute("INSERT INTO album_cache (artist, album, last_checked) VALUES (?1, ?2, ?3) ON CONFLICT(artist, album) DO UPDATE SET last_checked = ?3",
     params![artist.to_lowercase(), album.to_lowercase(), Utc::now().timestamp()])?;
     Ok(())
 }
 
 fn get_release_year_db(db: &Db, artist: &str, album: &str) -> Result<u64, u64> {
     let (year, last_checked): (Option<u64>, Option<u64>) = db
-        .conn
+        .conn()
         .query_row(
             "SELECT year, last_checked FROM album_cache WHERE artist = ?1 AND album = ?2",
             [artist.to_lowercase(), album.to_lowercase()],
@@ -1020,7 +1020,7 @@ impl BotCommand for FixReleaseYear {
             Err(0) => bail!("Album not found in database, check spelling?"),
             _ => None,
         };
-        db.conn.execute(
+        db.conn().execute(
             "UPDATE album_cache SET year = ?3, last_checked = 0 WHERE artist = ?1 AND album = ?2",
             params![
                 self.artist.to_lowercase(),
@@ -1072,7 +1072,7 @@ fn complete_album<'a>(
 
         let values: Vec<String> = {
             let db = handler.db.lock().await;
-            let mut stmt = db.conn.prepare(&qry)?;
+            let mut stmt = db.conn().prepare(&qry)?;
             let values = stmt
                 .query_map([artist.to_lowercase(), album.to_lowercase()], |row| {
                     row.get(0)
@@ -1095,16 +1095,8 @@ fn complete_album<'a>(
 
 #[async_trait]
 impl Module for Lastfm {
-    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Lastfm::new())
-    }
-
-    async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {
-        builder.module::<Spotify>().await
-    }
-
     async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
-        db.conn.execute(
+        db.conn().execute(
             "CREATE TABLE IF NOT EXISTS album_cache (
             artist STRING NOT NULL,
             album STRING NOT NULL,
@@ -1121,5 +1113,15 @@ impl Module for Lastfm {
         store.register::<GetAotys>();
         store.register::<FixReleaseYear>();
         completions.push(complete_album);
+    }
+}
+
+impl RegisterableModule for Lastfm {
+    async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
+        Ok(Lastfm::new())
+    }
+
+    async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {
+        builder.module::<Spotify>().await
     }
 }
