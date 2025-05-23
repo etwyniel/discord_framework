@@ -588,6 +588,7 @@ impl BotCommand for EditLp {
             .into_iter()
             .filter(|msg| msg.author.id == self_id)
             .find(|msg| {
+                #[allow(deprecated)] // no other way to get the command name currently
                 if let Some(interaction) = &msg.interaction {
                     interaction.user.id == author_id && interaction.name == "lp"
                 } else {
