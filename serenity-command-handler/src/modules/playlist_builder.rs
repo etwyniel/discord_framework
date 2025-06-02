@@ -165,6 +165,7 @@ async fn resolve_pick(
 
 async fn build_playlist<'a, 'b: 'a>(
     handler: &'a Handler,
+    guild_id: GuildId,
     user_id: &'b str,
     picks: &'b [PlaylistPick],
     playlist: Option<PlaylistId<'static>>,
@@ -179,12 +180,25 @@ async fn build_playlist<'a, 'b: 'a>(
     let user_id: UserId = UserId::from_id(user_id)?;
     let playlist = match playlist {
         None => {
+            let playlist_name_config: Option<String> = handler
+                .get_guild_field(guild_id.get(), "playlist_name")
+                .await?;
+            let playlist_name = if let Some(name) = playlist_name_config {
+                name
+            } else {
+                let http = handler.http.get().unwrap();
+                let guild = http
+                    .get_guild_preview(guild_id)
+                    .await
+                    .context("failed to get guild name")?;
+                format!("{} Playlist", guild.name)
+            };
             let date = Utc::now().date_naive().format("%Y-%m-%d");
             let resp = spotify
                 .client
                 .user_playlist_create(
                     user_id,
-                    &format!("Mopping the Taste #{edition} | {date}"),
+                    &format!("{playlist_name} #{edition} | {date}"),
                     Some(true),
                     None,
                     None,
@@ -315,7 +329,7 @@ async fn build_playlist_from_picks(
         .ok_or_else(|| anyhow!("No Spotify user ID configured for this server."))?;
     let edition = edition + if increment_edition { 1 } else { 0 };
     let (playlist, valid, invalid) =
-        build_playlist(handler, &user_id, &picks, playlist_id, edition).await?;
+        build_playlist(handler, guild_id, &user_id, &picks, playlist_id, edition).await?;
     let nvalid = valid.len();
     let variables = Variables {
         last_row: current_row,
@@ -456,7 +470,8 @@ pub struct PlaylistBuilder {}
 #[async_trait]
 impl Module for PlaylistBuilder {
     async fn setup(&mut self, db: &mut crate::db::Db) -> anyhow::Result<()> {
-        db.add_guild_field("playlist_sheet_id", "STRING")
+        db.add_guild_field("playlist_sheet_id", "STRING")?;
+        db.add_guild_field("playlist_name", "STRING")
     }
 
     fn register_commands(
