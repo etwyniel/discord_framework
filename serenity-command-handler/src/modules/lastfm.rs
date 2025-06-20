@@ -339,6 +339,9 @@ impl GetAotys {
                 content.push('\n');
                 content.push_str(&line);
             });
+        content.push_str(
+            "\n-# Something missing? Fix incorrect release years with /fix_release_year.",
+        );
         opts.create_followup(
             http,
             CreateInteractionResponseFollowup::new()
