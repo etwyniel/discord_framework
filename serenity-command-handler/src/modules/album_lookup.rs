@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::album::{Album, AlbumProvider};
 use crate::db::Db;
-use crate::modules::{Bandcamp, Lastfm, Spotify};
+use crate::modules::{Bandcamp, Lastfm, Spotify, Tidal};
 use crate::{
     CommandStore, CompletionStore, Handler, HandlerBuilder, Module, ModuleMap, RegisterableModule,
 };
@@ -137,12 +137,18 @@ impl RegisterableModule for AlbumLookup {
             .module::<Spotify>()
             .await?
             .module::<Bandcamp>()
+            .await?
+            .module::<Tidal>()
             .await
     }
 
     async fn init(m: &ModuleMap) -> anyhow::Result<Self> {
         Ok(AlbumLookup {
-            providers: vec![m.module_arc::<Spotify>()?, m.module_arc::<Bandcamp>()?],
+            providers: vec![
+                m.module_arc::<Spotify>()?,
+                m.module_arc::<Bandcamp>()?,
+                m.module_arc::<Tidal>()?,
+            ],
         })
     }
 }

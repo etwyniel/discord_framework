@@ -6,6 +6,9 @@ pub use spotify::SpotifyOAuth;
 pub mod bandcamp;
 pub use bandcamp::Bandcamp;
 
+pub mod tidal;
+pub use tidal::Tidal;
+
 pub mod lastfm;
 pub use lastfm::Lastfm;
 
