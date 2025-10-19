@@ -362,7 +362,10 @@ impl BotCommand for Lp {
         if handler.get_guild_field(guild_id, "create_threads").await? {
             // Create a thread from the response message for the LP to take place in
             let chan = message.channel(http).await?;
-            let thread_name = info.name.as_deref().unwrap_or("Listening party");
+            let mut thread_name = info.name.as_deref().unwrap_or("Listening party");
+            if thread_name.len() > 100 {
+                thread_name = &thread_name[..100];
+            }
             let mut guild_chan = chan.guild().map(|c| (c.kind, c));
             if let (None, Some((ChannelType::PublicThread, c))) = (&webhook, &mut guild_chan) {
                 // If we're already in a thread, just rename it
