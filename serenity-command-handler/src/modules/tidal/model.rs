@@ -125,6 +125,17 @@ pub struct MultiResponse<T> {
     pub included: Vec<IncludedItem>,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct Error {
+    pub code: String,
+    pub detail: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ErrorResponse {
+    pub errors: Vec<Error>,
+}
+
 impl Response<AlbumAttributes> {
     pub fn into_album(self) -> Album {
         let Response {

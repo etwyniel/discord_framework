@@ -2,7 +2,9 @@ use std::{collections::HashMap, env};
 
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Local};
+use futures::TryFutureExt;
 use reqwest::{self, Client, Method};
+use serde::de::DeserializeOwned;
 use serenity::async_trait;
 use tokio::sync::RwLock;
 
@@ -26,6 +28,20 @@ pub struct Tidal {
     client: Client,
 }
 
+async fn parse_response<T: DeserializeOwned>(resp: reqwest::Response) -> anyhow::Result<T> {
+    if resp.status().is_client_error() {
+        let err_resp = resp.json::<ErrorResponse>().await?;
+        let msg = err_resp
+            .errors
+            .into_iter()
+            .next()
+            .map(|e| e.detail)
+            .unwrap_or("unknown error".to_string());
+        bail!(msg);
+    }
+    Ok(resp.json().await?)
+}
+
 impl Tidal {
     pub fn from_env() -> anyhow::Result<Self> {
         let client_id = env::var("TIDAL_CLIENT_ID").context("missing TIDAL_CLIENT_ID")?;
@@ -36,27 +52,24 @@ impl Tidal {
     }
 
     pub async fn get_token(&self) -> anyhow::Result<String> {
+        if let Some(Token { value, expiration }) = self.token.read().await.as_ref()
+            && *expiration - Local::now() > chrono::Duration::hours(1)
         {
-            let token = self.token.read().await;
-            if let Some(Token { value, expiration }) = token.as_ref()
-                && *expiration - Local::now() > chrono::Duration::hours(1)
-            {
-                return Ok(value.to_owned());
-            }
+            // token exists and is still valid for over an hour
+            return Ok(value.to_owned());
         }
 
-        let body = self
+        let resp: AuthResponse = self
             .client
             .post("https://auth.tidal.com/v1/oauth2/token")
             .basic_auth(&self.client_id, Some(&self.client_secret))
             .form(&HashMap::from([("grant_type", "client_credentials")]))
             .send()
-            .await?
-            .text()
-            .await?;
-        dbg!(&body);
+            .map_err(anyhow::Error::from)
+            .and_then(parse_response)
+            .await
+            .context("failed to fetch Tidal API authorization token")?;
 
-        let resp: AuthResponse = serde_json::from_str(&body)?;
         let token = Token {
             value: resp.access_token,
             expiration: Local::now() + chrono::Duration::seconds(resp.expires_in as i64),
@@ -99,21 +112,17 @@ impl AlbumProvider for Tidal {
             .split('/')
             .next()
             .ok_or_else(|| anyhow!("invalid album ID"))?;
+
         let request_url = format!("{BASE}/albums/{id}");
-        let resp = self
-            .request(Method::GET, &request_url)
+        self.request(Method::GET, &request_url)
             .await?
             .query(&[("include", "artists"), ("include", "coverArt")])
             .send()
+            .map_err(anyhow::Error::from)
+            .and_then(parse_response::<Response<AlbumAttributes>>)
             .await
-            .context("tidal API request failed")?
-            .text()
-            .await?;
-
-        let album = serde_json::from_str::<'_, Response<AlbumAttributes>>(&resp)
-            .context("failed to parse album data")?
-            .into_album();
-        Ok(album)
+            .context("failed to fetch album metadata from Tidal")
+            .map(Response::into_album)
     }
 
     async fn query_album(&self, q: &str) -> anyhow::Result<Album> {
@@ -123,8 +132,8 @@ impl AlbumProvider for Tidal {
             .await?
             .query(&[("include", "albums")])
             .send()
-            .await?
-            .json()
+            .map_err(anyhow::Error::from)
+            .and_then(parse_response)
             .await?;
         let (album_id, album) = resp
             .included
@@ -138,8 +147,8 @@ impl AlbumProvider for Tidal {
             .await?
             .query(&[("include", "artists")])
             .send()
-            .await?
-            .json()
+            .map_err(anyhow::Error::from)
+            .and_then(parse_response)
             .await?;
         let (_, artist) = resp
             .included
@@ -166,8 +175,8 @@ impl AlbumProvider for Tidal {
             .request(Method::GET, &request_url)
             .await?
             .send()
-            .await?
-            .json()
+            .map_err(anyhow::Error::from)
+            .and_then(parse_response)
             .await?;
         let filter = resp
             .data
@@ -182,8 +191,8 @@ impl AlbumProvider for Tidal {
             .query(&[("include", "artists")])
             .query(&filter)
             .send()
-            .await?
-            .json()
+            .map_err(anyhow::Error::from)
+            .and_then(parse_response)
             .await?;
 
         Ok(data
