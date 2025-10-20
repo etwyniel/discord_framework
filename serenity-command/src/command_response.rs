@@ -62,20 +62,20 @@ impl ResponseType {
     }
 }
 
+pub struct ContentAndFlags(
+    pub String,
+    pub Option<Vec<CreateEmbed>>,
+    pub Option<Vec<String>>,
+    pub InteractionResponseFlags,
+);
+
 impl CommandResponse {
-    pub fn to_contents_and_flags(
-        self,
-    ) -> Option<(
-        String,
-        Option<Vec<CreateEmbed>>,
-        Option<Vec<String>>,
-        InteractionResponseFlags,
-    )> {
+    pub fn to_contents_and_flags(self) -> Option<ContentAndFlags> {
         Some(match self {
             CommandResponse::None => return None,
             CommandResponse::Public(resp) => {
                 let (text, embeds, attachments) = resp.to_content();
-                (
+                ContentAndFlags(
                     text.unwrap_or_default(),
                     embeds,
                     attachments,
@@ -84,7 +84,7 @@ impl CommandResponse {
             }
             CommandResponse::Private(resp) => {
                 let (text, embeds, attachments) = resp.to_content();
-                (
+                ContentAndFlags(
                     text.unwrap_or_default(),
                     embeds,
                     attachments,

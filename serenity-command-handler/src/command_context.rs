@@ -9,7 +9,7 @@ use serenity::{
     },
 };
 
-use serenity_command::CommandResponse;
+use serenity_command::{CommandResponse, ContentAndFlags};
 
 #[async_trait]
 pub trait Responder {
@@ -29,10 +29,11 @@ impl Responder for CommandInteraction {
         contents: CommandResponse,
         role_id: Option<u64>,
     ) -> anyhow::Result<Option<Message>> {
-        let (contents, embeds, attachments, flags) = match contents.to_contents_and_flags() {
-            None => return Ok(None),
-            Some(c) => c,
-        };
+        let ContentAndFlags(contents, embeds, attachments, flags) =
+            match contents.to_contents_and_flags() {
+                None => return Ok(None),
+                Some(c) => c,
+            };
         self.create_response(http, {
             let mut msg = CreateInteractionResponseMessage::new();
             msg = embeds
@@ -44,7 +45,7 @@ impl Responder for CommandInteraction {
                 .flags(flags)
                 .allowed_mentions(CreateAllowedMentions::new().roles(role_id));
             for att in attachments.iter().flatten() {
-                msg = msg.add_file(CreateAttachment::url(http, &att).await?);
+                msg = msg.add_file(CreateAttachment::url(http, att).await?);
             }
             CreateInteractionResponse::Message(msg)
         })

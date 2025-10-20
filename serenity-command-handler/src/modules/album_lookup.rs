@@ -49,11 +49,12 @@ impl BotCommand for LookupAlbum {
                 .map(|d| format!(" ({d})"))
                 .unwrap_or_default(),
         );
-        if info.genres.is_empty() {
-            if let Some(artist) = &info.artist {
-                info.genres = handler.module::<Lastfm>()?.artist_top_tags(artist).await?;
-            }
+        if info.genres.is_empty()
+            && let Some(artist) = &info.artist
+        {
+            info.genres = handler.module::<Lastfm>()?.artist_top_tags(artist).await?;
         }
+
         if let Some(genres) = info.format_genres() {
             _ = writeln!(&mut contents, "{genres}");
         }

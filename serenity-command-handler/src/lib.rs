@@ -209,7 +209,6 @@ impl Handler {
 
             if let Err(why) = command.respond(&ctx.http, resp, None).await {
                 eprintln!("cannot respond to slash command: {why:?}");
-                return;
             }
         }
     }

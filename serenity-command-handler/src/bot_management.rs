@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use serenity::{
     all::{
         CommandInteraction, Context, CreateAutocompleteResponse, CreateInteractionResponse,
@@ -11,8 +11,8 @@ use serenity_command::{BotCommand, CommandBuilder, CommandKey, CommandResponse};
 use serenity_command_derive::Command;
 
 use crate::{
-    command_context::{get_focused_option, get_str_opt_ac},
     CommandStore, CompletionStore, Handler, Module, RegisterableModule,
+    command_context::{get_focused_option, get_str_opt_ac},
 };
 
 #[derive(Command)]
@@ -47,7 +47,7 @@ impl BotCommand for EnableCommandForGuild {
         let Some((_, runner)) = commands
             .0
             .iter()
-            .find(|(&(name, _), _)| name == self.command)
+            .find(|&((name, _), _)| *name == self.command)
         else {
             return CommandResponse::private(format!("command {} not found", self.command));
         };
@@ -113,7 +113,7 @@ impl BotCommand for DisableCommandForGuild {
             .set_command_enabled_for_guild(&self.command, guild, false)?;
         // unregister command in target guild
         for command in guild.get_commands(&ctx).await? {
-            if &command.name != &self.command {
+            if command.name != self.command {
                 continue;
             }
             guild.delete_command(&ctx, command.id).await?;

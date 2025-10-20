@@ -85,7 +85,8 @@ impl BotCommand for GetBdays {
         let today = Utc::now().date_naive();
         let current_day = today.day() as u8;
         let current_month = today.month() as u8;
-        bdays.sort_unstable_by_key(|Birthday { day, mut month, .. }| {
+        bdays.sort_unstable_by_key(|Birthday { day, month, .. }| {
+            let mut month = *month;
             if month < current_month || (month == current_month && *day < current_day) {
                 month += 12;
             }

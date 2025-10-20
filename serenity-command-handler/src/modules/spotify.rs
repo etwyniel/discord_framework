@@ -1,20 +1,21 @@
 use std::{
     borrow::Cow,
     collections::HashSet,
-    sync::{atomic::AtomicU64, LazyLock},
+    sync::{LazyLock, atomic::AtomicU64},
 };
 
 use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule};
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{Context as _, anyhow, bail};
 use regex::Regex;
 use reqwest::redirect::Policy;
 use rspotify::{
+    AuthCodeSpotify, ClientCredsSpotify, Config, Credentials,
     clients::{BaseClient, OAuthClient},
     model::{
         AlbumId, FullEpisode, FullTrack, Id, PlayableItem, PlaylistId, SearchType,
         SimplifiedArtist, TrackId,
     },
-    scopes, AuthCodeSpotify, ClientCredsSpotify, Config, Credentials,
+    scopes,
 };
 use serenity::{
     all::{
@@ -373,10 +374,9 @@ impl BotCommand for SpotifyAuthenticate {
                     CreateInteractionResponseMessage::new()
                         .ephemeral(true)
                         .content(format!("authentication URL: {url}"))
-                        .components(vec![CreateActionRow::Buttons(vec![CreateButton::new(
-                            INTERACTION_AUTH_PROMPT,
-                        )
-                        .label("Submit token")])]),
+                        .components(vec![CreateActionRow::Buttons(vec![
+                            CreateButton::new(INTERACTION_AUTH_PROMPT).label("Submit token"),
+                        ])]),
                 ),
             )
             .await?;
@@ -484,7 +484,7 @@ impl BotCommand for Unlink {
         if urls.is_empty() {
             bail!("No shortened spotify links found in message");
         }
-        let plural_s = (urls.len() > 1).then_some("s").unwrap_or_default();
+        let plural_s = if urls.len() > 1 { "s" } else { "" };
         let mut resp = format!("Resolved spotify link{plural_s} from {}", self.0.link());
         urls.into_iter().for_each(|url| {
             resp.push('\n');

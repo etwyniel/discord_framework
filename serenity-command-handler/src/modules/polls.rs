@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use itertools::Itertools;
 use serenity::builder::{
     CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage,
@@ -16,12 +16,12 @@ use serenity::model::prelude::{ChannelId, Message, Reaction, ReactionType, UserI
 use serenity::{async_trait, prelude::Context};
 use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::time::timeout;
 
 use crate::{
-    events, CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule,
+    CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule, events,
 };
 
 const YES: &str = "<:FeelsGoodCrab:988509541069127780>";
@@ -425,7 +425,7 @@ pub async fn crabdown(
     let go_emote = go_emote.unwrap_or(&module.go);
     for i in 0..3 {
         // repeat count emote 3 - i times
-        let contents = std::iter::repeat(count_emote).take(3 - i).join(" ");
+        let contents = std::iter::repeat_n(count_emote, 3 - i).join(" ");
         channel.say(http, contents).await?;
         interval.tick().await;
     }

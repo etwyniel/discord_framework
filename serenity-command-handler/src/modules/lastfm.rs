@@ -1,4 +1,4 @@
-use anyhow::{bail, Context as _};
+use anyhow::{Context as _, bail};
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::future::BoxFuture;
@@ -36,7 +36,7 @@ use std::time::Duration;
 use crate::command_context::{get_focused_option, get_str_opt_ac};
 use crate::db::Db;
 use crate::modules::Spotify;
-use crate::{prelude::*, RegisterableModule};
+use crate::{RegisterableModule, prelude::*};
 use serenity_command_derive::Command;
 
 const API_ENDPOINT: &str = "http://ws.audioscrobbler.com/2.0/";
@@ -857,12 +857,11 @@ impl Default for Lastfm {
 
 fn err_is_status_code(e: &anyhow::Error, expected: u16) -> bool {
     for err in e.chain() {
-        if let Some(ClientError::Http(http_err)) = err.downcast_ref() {
-            if let rspotify_http::HttpError::StatusCode(code) = http_err.as_ref() {
-                if code.status() == expected {
-                    return true;
-                }
-            }
+        if let Some(ClientError::Http(http_err)) = err.downcast_ref()
+            && let rspotify_http::HttpError::StatusCode(code) = http_err.as_ref()
+            && code.status() == expected
+        {
+            return true;
         }
     }
     false
@@ -946,16 +945,14 @@ pub async fn get_release_years<'a, I: IntoIterator<Item = (&'a str, &'a str, usi
     );
     let db = db.lock().await;
     let mut stmt = db.conn().prepare(&query)?;
-    let res = stmt
-        .query([])?
+    stmt.query([])?
         .map(|row| {
             let year: Option<u64> = row.get(1)?;
             let last_checked: Option<u64> = row.get(2)?;
             Ok((row.get(0)?, year.ok_or(last_checked.unwrap_or_default())))
         })
         .collect()
-        .map_err(anyhow::Error::from);
-    res
+        .map_err(anyhow::Error::from)
 }
 
 async fn set_release_year(

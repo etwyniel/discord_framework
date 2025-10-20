@@ -3,13 +3,13 @@ use std::fmt::Write;
 use std::ops::Add;
 
 use crate::RegisterableModule;
-use crate::{db::Db, CommandStore, HandlerBuilder, Module};
+use crate::{CommandStore, HandlerBuilder, Module, db::Db};
+use anyhow::Context as _;
 use anyhow::anyhow;
 use anyhow::bail;
-use anyhow::Context as _;
-use chrono::{prelude::*, Duration};
-use futures::future::BoxFuture;
+use chrono::{Duration, prelude::*};
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use itertools::Itertools;
 use regex::Regex;
 use reqwest::Url;
@@ -31,16 +31,16 @@ use serenity::builder::EditThread;
 use serenity::builder::ExecuteWebhook;
 use serenity::builder::GetMessages;
 use serenity::client::Context;
+use serenity::model::Permissions;
 use serenity::model::application::CommandDataOption;
 use serenity::model::application::CommandType;
 use serenity::model::channel::ChannelType;
 use serenity::model::id::GuildId;
 use serenity::model::prelude::CommandInteraction;
-use serenity::model::Permissions;
 use serenity_command_derive::Command;
 
 use crate::album::Album;
-use crate::command_context::{get_focused_option, get_str_opt_ac, Responder};
+use crate::command_context::{Responder, get_focused_option, get_str_opt_ac};
 use crate::modules::{Bandcamp, Lastfm, Spotify};
 use crate::prelude::*;
 use serenity_command::CommandResponse;
@@ -299,10 +299,10 @@ impl BotCommand for Lp {
         ctx: &Context,
         command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        if let (Some(_), Some(member)) = (self.role, &command.member) {
-            if !member.permissions.unwrap_or_default().mention_everyone() {
-                bail!("Only admins are allowed to specify a role to ping.");
-            }
+        if let (Some(_), Some(member)) = (self.role, &command.member)
+            && !member.permissions.unwrap_or_default().mention_everyone()
+        {
+            bail!("Only admins are allowed to specify a role to ping.");
         }
         let http = &ctx.http;
         let (resp_content, role_id, info) = self.build_contents(handler, command, None).await?;
@@ -655,19 +655,25 @@ impl ModLp {
         let mut provider = get_str_opt_ac(options, "provider");
         let focused = get_focused_option(options);
         let mut album = get_str_opt_ac(options, "album");
-        if let (Some(mut s), Some("album")) = (&mut album, focused) {
+        if let (Some(s), Some("album")) = (&mut album, focused) {
             if s.len() >= 7 && !s.starts_with("https://") {
                 // if url, don't complete
                 if let (None, Some(stripped)) = (&provider, s.strip_prefix("bc:")) {
                     // as a shorthand, search bandcamp for values with the prefix "bc:"
-                    s = stripped;
+                    *s = stripped;
                     provider = Some("bandcamp");
                 }
-                choices = handler
+                choices = match handler
                     .module::<AlbumLookup>()?
                     .query_albums(s, provider)
                     .await
-                    .unwrap_or_default();
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        dbg!(e);
+                        vec![]
+                    }
+                };
             }
             if !s.is_empty() {
                 choices.push((s.to_string(), s.to_string()));

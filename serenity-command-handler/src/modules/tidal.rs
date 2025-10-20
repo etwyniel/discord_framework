@@ -1,6 +1,6 @@
 use std::{collections::HashMap, env};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Local};
 use iso8601_duration::Duration;
 use reqwest::{self, Client, Method};
@@ -9,8 +9,8 @@ use serenity::async_trait;
 use tokio::sync::RwLock;
 
 use crate::{
-    album::{Album, AlbumProvider},
     Module, ModuleMap, RegisterableModule,
+    album::{Album, AlbumProvider},
 };
 
 struct Token {
@@ -50,10 +50,10 @@ impl Tidal {
     pub async fn get_token(&self) -> anyhow::Result<String> {
         {
             let token = self.token.read().await;
-            if let Some(Token { value, expiration }) = token.as_ref() {
-                if *expiration - Local::now() > chrono::Duration::hours(1) {
-                    return Ok(value.to_owned());
-                }
+            if let Some(Token { value, expiration }) = token.as_ref()
+                && *expiration - Local::now() > chrono::Duration::hours(1)
+            {
+                return Ok(value.to_owned());
             }
         }
 
@@ -207,7 +207,7 @@ pub struct MultiResponse<T> {
 }
 
 impl Response<AlbumAttributes> {
-    fn to_album(self) -> Album {
+    fn into_album(self) -> Album {
         let Response {
             data:
                 ResponseData {
@@ -218,6 +218,7 @@ impl Response<AlbumAttributes> {
                 },
             included,
         } = self;
+
         let duration = Duration::parse(&attributes.duration)
             .ok()
             .and_then(|dur| Duration::to_chrono(&dur));
@@ -232,12 +233,9 @@ impl Response<AlbumAttributes> {
             });
 
         let cover = included
-            .iter()
-            .filter_map(|inc| match &inc.entity {
-                IncludedEntity::Artwortk(ArtworkAttributes { files }) => Some(files),
-                _ => None,
-            })
-            .flat_map(|files| files.first())
+            .into_iter()
+            .filter_map(IncludedItem::artwork)
+            .flat_map(|(_, artwork)| artwork.files)
             .next()
             .map(|file| file.href.clone());
 
@@ -282,7 +280,7 @@ impl AlbumProvider for Tidal {
 
         let album = serde_json::from_str::<'_, Response<AlbumAttributes>>(&resp)
             .context("failed to parse album data")?
-            .to_album();
+            .into_album();
         Ok(album)
     }
 

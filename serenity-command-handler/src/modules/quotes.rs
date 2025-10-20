@@ -37,7 +37,9 @@ use serenity_command::{BotCommand, CommandKey, CommandResponse};
 use serenity_command_derive::Command;
 use tokio::time::interval;
 
-use crate::{command_context::get_str_opt_ac, db::Db, prelude::*, RegisterableModule};
+use crate::{RegisterableModule, command_context::get_str_opt_ac, db::Db, prelude::*};
+
+const SEPARATORS: &str = "\".,?-!&:*$%#(){}<>'; \t\n|";
 
 pub async fn message_to_quote_contents(
     _handler: &Handler,

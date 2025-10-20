@@ -1,36 +1,35 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{Context as _, anyhow, bail};
 use chrono::Duration;
 use fallible_iterator::FallibleIterator;
 use google_sheets4::Sheets;
-use hyper::{client::HttpConnector, Body, Method, Request, StatusCode};
+use hyper::{Body, Method, Request, StatusCode, client::HttpConnector};
 use hyper_tls::HttpsConnector;
 use itertools::Itertools;
 use regex::Regex;
 use rspotify::prelude::Id;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_derive::{Deserialize, Serialize};
 use serenity::{
-    async_trait,
+    FutureExt, async_trait,
     builder::{CreateCommand, CreateCommandOption, CreateEmbed},
     futures::future::BoxFuture,
     model::{
+        Permissions,
         application::{CommandDataOptionValue, CommandInteraction, CommandOptionType},
         prelude::GuildId,
         user::User,
-        Permissions,
     },
     prelude::{Context, RwLock},
-    FutureExt,
 };
-use yup_oauth2::{authenticator::Authenticator, ServiceAccountAuthenticator};
+use yup_oauth2::{ServiceAccountAuthenticator, authenticator::Authenticator};
 
 use crate::{
+    RegisterableModule,
     db::Db,
     modules::{AlbumLookup, Spotify},
     prelude::*,
-    RegisterableModule,
 };
 use serenity_command::{BotCommand, CommandKey, CommandResponse};
 use serenity_command_derive::Command;
@@ -837,7 +836,7 @@ impl SimpleForm {
         let rows = values
             .into_iter()
             .filter(|row| {
-                row.get(0)
+                row.first()
                     .map(|submitter| {
                         submitter
                             .trim_start_matches('@')
