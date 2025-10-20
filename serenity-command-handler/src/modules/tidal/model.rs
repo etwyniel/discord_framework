@@ -136,25 +136,17 @@ pub struct ErrorResponse {
     pub errors: Vec<Error>,
 }
 
-impl Response<AlbumAttributes> {
-    pub fn into_album(self) -> Album {
-        let Response {
-            data:
-                ResponseData {
-                    id,
-                    attributes,
-                    relationships,
-                    ..
-                },
-            included,
-        } = self;
-
-        let duration = Duration::parse(&attributes.duration)
+impl AlbumAttributes {
+    pub fn into_album(
+        self,
+        id: String,
+        artists: &[Relationship],
+        included: Vec<IncludedItem>,
+    ) -> Album {
+        let duration = Duration::parse(&self.duration)
             .ok()
             .and_then(|dur| Duration::to_chrono(&dur));
-        let artist = relationships
-            .artists
-            .data
+        let artist = artists
             .first()
             .and_then(|Relationship { id, .. }| included.iter().find(|inc| &inc.id == id))
             .and_then(|inc| match &inc.entity {
@@ -170,8 +162,8 @@ impl Response<AlbumAttributes> {
             .map(|file| file.href.clone());
 
         Album {
-            name: Some(attributes.title),
-            release_date: attributes.release_date,
+            name: Some(self.title),
+            release_date: self.release_date,
             duration,
             url: Some(album_share_url(&id)),
             artist,

@@ -1,3 +1,4 @@
+use serenity::all::CreateCommandOption;
 use serenity::model::prelude::CommandInteraction;
 use serenity::{async_trait, prelude::Context};
 use serenity_command::{BotCommand, CommandResponse};
@@ -60,6 +61,16 @@ impl BotCommand for LookupAlbum {
         }
         contents.push_str(info.url.as_deref().unwrap_or("no link found"));
         CommandResponse::public(contents)
+    }
+
+    fn setup_options(opt_name: &str, opt: CreateCommandOption) -> CreateCommandOption {
+        if opt_name == "provider" {
+            opt.add_string_choice("spotify", "spotify")
+                .add_string_choice("bandcamp", "bandcamp")
+                .add_string_choice("tidal", "tidal")
+        } else {
+            opt
+        }
     }
 }
 

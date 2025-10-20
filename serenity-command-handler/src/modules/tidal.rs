@@ -104,6 +104,10 @@ impl AlbumProvider for Tidal {
         "tidal"
     }
 
+    fn url_matches(&self, url: &str) -> bool {
+        url.starts_with("https://tidal.com/")
+    }
+
     async fn get_from_url(&self, url: &str) -> anyhow::Result<Album> {
         let Some(id) = url.strip_prefix("https://tidal.com/album/") else {
             bail!("not an album URL")
@@ -122,12 +126,25 @@ impl AlbumProvider for Tidal {
             .and_then(parse_response::<Response<AlbumAttributes>>)
             .await
             .context("failed to fetch album metadata from Tidal")
-            .map(Response::into_album)
+            .map(
+                |Response {
+                     data:
+                         ResponseData {
+                             id,
+                             attributes,
+                             relationships,
+                             ..
+                         },
+                     included,
+                 }| {
+                    attributes.into_album(id, &relationships.artists.data, included)
+                },
+            )
     }
 
     async fn query_album(&self, q: &str) -> anyhow::Result<Album> {
         let request_url = format!("{BASE}/searchResults/{q}/relationships/albums");
-        let resp: Response<Vec<Relationship>> = self
+        let resp: MultiResponse<Relationship> = self
             .request(Method::GET, &request_url)
             .await?
             .query(&[("include", "albums")])
@@ -142,7 +159,7 @@ impl AlbumProvider for Tidal {
             .context("album not found")?;
         // get artist name
         let request_url = format!("{BASE}/albums/{album_id}/relationships/artists");
-        let resp: Response<Vec<Relationship>> = self
+        let MultiResponse { data, included } = self
             .request(Method::GET, &request_url)
             .await?
             .query(&[("include", "artists")])
@@ -150,22 +167,9 @@ impl AlbumProvider for Tidal {
             .map_err(anyhow::Error::from)
             .and_then(parse_response)
             .await?;
-        let (_, artist) = resp
-            .included
-            .into_iter()
-            .find_map(IncludedItem::artist)
-            .context("failed to find album artist")?;
-        Ok(Album {
-            name: Some(album.title),
-            artist: Some(artist.name),
-            release_date: album.release_date,
-            url: Some(album_share_url(&album_id)),
-            ..Default::default()
-        })
-    }
 
-    fn url_matches(&self, url: &str) -> bool {
-        url.starts_with("https://tidal.com/")
+        let album = album.into_album(album_id, &data, included);
+        Ok(album)
     }
 
     async fn query_albums(&self, q: &str) -> anyhow::Result<Vec<(String, String)>> {
