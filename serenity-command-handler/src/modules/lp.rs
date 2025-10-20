@@ -46,7 +46,7 @@ use crate::prelude::*;
 use serenity_command::CommandResponse;
 use serenity_command::{BotCommand, CommandKey};
 
-use super::AlbumLookup;
+use super::{AlbumLookup, Tidal};
 
 const SEPARATOR: char = '\u{200B}';
 const LP_URI: &str = "http://lp";
@@ -402,6 +402,7 @@ impl BotCommand for Lp {
         if opt_name == "provider" {
             opt.add_string_choice("spotify", "spotify")
                 .add_string_choice("bandcamp", "bandcamp")
+                .add_string_choice("tidal", "tidal")
         } else {
             opt
         }
@@ -732,6 +733,8 @@ impl RegisterableModule for ModLp {
             .module::<Spotify>()
             .await?
             .module::<Bandcamp>()
+            .await?
+            .module::<Tidal>()
             .await?
             .module::<AlbumLookup>()
             .await
