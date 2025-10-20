@@ -4,8 +4,7 @@ use fallible_iterator::FallibleIterator;
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt};
 use image::imageops::FilterType;
-use image::io::Reader;
-use image::{DynamicImage, GenericImage, ImageOutputFormat, RgbaImage};
+use image::{DynamicImage, GenericImage, ImageFormat, ImageReader, RgbaImage};
 use itertools::Itertools;
 use regex::Regex;
 use reqwest::{Client, Method, StatusCode, Url};
@@ -370,7 +369,7 @@ impl TopAlbum {
                 return Ok(None);
             };
             let reader = match reqwest::get(&image_url).await {
-                Ok(resp) => Reader::new(Cursor::new(
+                Ok(resp) => ImageReader::new(Cursor::new(
                     resp.bytes().await.context("Error getting album cover")?,
                 )),
                 Err(_) => return Ok(None),
@@ -410,7 +409,7 @@ pub async fn create_aoty_chart(albums: &[AlbumWithImage], skip: bool) -> anyhow:
     }
     let buf = Vec::new();
     let mut writer = Cursor::new(buf);
-    out.write_to(&mut writer, ImageOutputFormat::Png)?;
+    out.write_to(&mut writer, ImageFormat::Png)?;
     Ok(writer.into_inner())
 }
 

@@ -107,8 +107,9 @@ impl<C: BaseClient> Spotify<C> {
             .iter()
             .flat_map(|item| item.track.as_ref())
             .map(|track| match track {
-                PlayableItem::Track(FullTrack { duration, .. }) => duration,
-                PlayableItem::Episode(FullEpisode { duration, .. }) => duration,
+                PlayableItem::Track(FullTrack { duration, .. })
+                | PlayableItem::Episode(FullEpisode { duration, .. }) => *duration,
+                PlayableItem::Unknown(_) => Default::default(),
             })
             .sum();
         Ok(Album {

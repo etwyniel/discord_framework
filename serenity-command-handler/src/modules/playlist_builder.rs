@@ -1,10 +1,10 @@
 use std::{fmt::Write, ops::Not, sync::Arc};
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{Context as _, anyhow, bail};
 use chrono::Utc;
 use google_sheets4::api::ValueRange;
 use rand::{seq::SliceRandom, thread_rng};
-use reqwest::{redirect::Policy, Url};
+use reqwest::{Url, redirect::Policy};
 use rspotify::{
     model::{Id, PlaylistId, TrackId, UserId},
     prelude::{BaseClient, OAuthClient, PlayableId},
@@ -14,15 +14,15 @@ use serenity::{
     async_trait,
     builder::{CreateInteractionResponse, EditInteractionResponse},
     client::Context,
-    model::{application::CommandInteraction, Permissions},
+    model::{Permissions, application::CommandInteraction},
 };
 use tokio::task::JoinSet;
 
 use super::forms::Forms;
 use crate::{
+    RegisterableModule,
     modules::{AlbumLookup, SpotifyOAuth},
     prelude::*,
-    RegisterableModule,
 };
 use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
@@ -56,16 +56,25 @@ impl Variables {
             .take()
             .and_then(|mut rows| rows.pop())
             .unwrap_or_default();
-        let last_row = row.first().and_then(|val| val.parse().ok()).unwrap_or(1);
+        let last_row = row
+            .first()
+            .and_then(|val| val.as_str())
+            .and_then(|val| val.parse().ok())
+            .unwrap_or(1);
         let edition = row
             .get(1)
+            .and_then(|val| val.as_str())
             .and_then(|val| val.parse().ok())
             .unwrap_or_default();
         let last_playlist = row
             .get(2)
-            .cloned()
-            .and_then(|val| val.is_empty().not().then_some(val));
-        let current_row = row.get(3).and_then(|val| val.parse().ok()).unwrap_or(1);
+            .and_then(|val| val.as_str())
+            .and_then(|val| val.is_empty().not().then_some(val.to_string()));
+        let current_row = row
+            .get(3)
+            .and_then(|val| val.as_str())
+            .and_then(|val| val.parse().ok())
+            .unwrap_or(1);
         Ok(Variables {
             last_row,
             edition,
@@ -78,9 +87,9 @@ impl Variables {
         let forms: &Forms = handler.module()?;
         let sheets = forms.sheets_client.spreadsheets();
         let values = Some(vec![vec![
-            self.last_row.to_string(),
-            self.edition.to_string(),
-            self.last_playlist.unwrap_or_default(),
+            self.last_row.into(),
+            self.edition.into(),
+            self.last_playlist.unwrap_or_default().into(),
         ]]);
         let req = ValueRange {
             values,
@@ -279,12 +288,13 @@ async fn get_playlist_submissions(
     let Some(values) = rows.values else {
         bail!("No submissions found on this sheet");
     };
+    let get = |row: &[serde_json::Value], i: usize| row[i].as_str().unwrap_or_default().to_string();
     let picks = values
         .into_iter()
         .map(|row| PlaylistPick {
-            submitter: row[0].clone(),
-            song: row[1].clone(),
-            link: row[2].clone(),
+            submitter: get(&row, 0),
+            song: get(&row, 1),
+            link: get(&row, 2),
         })
         .collect();
     Ok(picks)
@@ -342,9 +352,13 @@ async fn build_playlist_from_picks(
     if increment_edition {
         let req = ValueRange {
             values: Some(vec![vec![
-                variables.edition.to_string(),
-                Utc::now().date_naive().format("%Y-%m-%d").to_string(),
-                playlist_url.clone(),
+                variables.edition.into(),
+                Utc::now()
+                    .date_naive()
+                    .format("%Y-%m-%d")
+                    .to_string()
+                    .into(),
+                playlist_url.clone().into(),
             ]]),
             ..Default::default()
         };
@@ -370,11 +384,11 @@ async fn build_playlist_from_picks(
         //     .unwrap_or_default();
         let user_id = String::new();
         let row = vec![
-            variables.edition.to_string(),
-            pick.submitter,
-            user_id,
-            pick.song,
-            pick.link,
+            variables.edition.to_string().into(),
+            pick.submitter.into(),
+            user_id.into(),
+            pick.song.into(),
+            pick.link.into(),
         ];
         picks_values.push(row);
     }

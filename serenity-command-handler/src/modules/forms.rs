@@ -3,9 +3,17 @@ use std::{cmp::Ordering, sync::Arc};
 use anyhow::{Context as _, anyhow, bail};
 use chrono::Duration;
 use fallible_iterator::FallibleIterator;
-use google_sheets4::Sheets;
-use hyper::{Body, Method, Request, StatusCode, client::HttpConnector};
-use hyper_tls::HttpsConnector;
+use google_sheets4::{
+    Sheets,
+    hyper::{self},
+    hyper_rustls::{self, HttpsConnector},
+    hyper_util::{
+        self,
+        client::legacy::{self, connect::HttpConnector},
+    },
+    yup_oauth2,
+};
+use hyper::StatusCode;
 use itertools::Itertools;
 use regex::Regex;
 use rspotify::prelude::Id;
@@ -333,7 +341,6 @@ impl SimpleForm {
 
 pub struct FormsClient {
     pub authenticator: Authenticator<HttpsConnector<HttpConnector>>,
-    pub client: hyper::Client<HttpsConnector<HttpConnector>>,
 }
 
 impl FormsClient {
@@ -342,16 +349,14 @@ impl FormsClient {
             .authenticator
             .token(&["https://www.googleapis.com/auth/forms.body.readonly"])
             .await?;
-        let req = Request::builder()
-            .uri(format!("https://forms.googleapis.com/v1/forms/{}", form_id,))
-            .header("Authorization", format!("Bearer {}", token.as_str()))
-            .body(Body::empty())?;
-        let resp = self.client.request(req).await?;
-        if resp.status() != StatusCode::OK {
-            bail!("Could not get form: status {}", resp.status());
-        }
-        let bytes = hyper::body::to_bytes(resp.into_body()).await?;
-        let form: Form = serde_json::from_slice(&bytes)?;
+        let url = format!("https://forms.googleapis.com/v1/forms/{}", form_id);
+        let form: Form = reqwest::Client::new()
+            .get(url)
+            .bearer_auth(token.token().unwrap())
+            .send()
+            .await?
+            .json()
+            .await?;
         form.to_simple()
     }
 }
@@ -712,7 +717,6 @@ impl SimpleForm {
             format!("@{}", &user.name)
         };
 
-        let forms: &Forms = handler.module()?;
         let spotify: &Spotify = handler.module()?;
         let lookup: &AlbumLookup = handler.module()?;
         let mut song_infos = Vec::new();
@@ -789,12 +793,12 @@ impl SimpleForm {
             .join("&");
 
         let url = self.form_response_url();
-        let req = Request::builder()
-            .uri(url)
-            .method(Method::POST)
+        let resp = reqwest::Client::new()
+            .post(url)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(Body::from(form_data.into_bytes()))?;
-        let resp = forms.forms_client.client.request(req).await?;
+            .body(form_data)
+            .send()
+            .await?;
         if resp.status() != StatusCode::OK {
             bail!("Failed to send response: status {}", resp.status());
         }
@@ -837,6 +841,7 @@ impl SimpleForm {
             .into_iter()
             .filter(|row| {
                 row.first()
+                    .and_then(|v| v.as_str())
                     .map(|submitter| {
                         submitter
                             .trim_start_matches('@')
@@ -850,6 +855,7 @@ impl SimpleForm {
             .map(|row| {
                 row.iter()
                     .skip(1) // skip timestamp and username
+                    .flat_map(|v| v.as_str())
                     .filter(|value| !(value.is_empty() || value.starts_with("https://")))
                     .join(" - ")
             })
@@ -984,8 +990,14 @@ impl RegisterableModule for Forms {
     }
 
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        let conn = hyper_tls::HttpsConnector::new();
-        let client = hyper::Client::builder().build(conn);
+        let conn = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .unwrap()
+            .https_or_http()
+            .enable_http1()
+            .build();
+        let executor = hyper_util::rt::TokioExecutor::new();
+        let client = legacy::Client::builder(executor.clone()).build(conn.clone());
         let client_secret = yup_oauth2::read_service_account_key(&"credentials.json".to_string())
             .await
             .unwrap();
@@ -993,11 +1005,9 @@ impl RegisterableModule for Forms {
             .build()
             .await
             .unwrap();
-        let sheets_client = google_sheets4::api::Sheets::new(client.clone(), authenticator.clone());
-        let forms_client = FormsClient {
-            authenticator,
-            client,
-        };
+        let http_client = hyper_util::client::legacy::Client::builder(executor).build(conn);
+        let sheets_client = google_sheets4::api::Sheets::new(http_client, authenticator.clone());
+        let forms_client = FormsClient { authenticator };
         let forms = Default::default();
         Ok(Forms {
             sheets_client,
