@@ -8,7 +8,6 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use crate::album::{Album, AlbumProvider};
-use crate::db::Db;
 use crate::modules::{Bandcamp, Lastfm, Spotify, Tidal};
 use crate::{
     CommandStore, CompletionStore, Handler, HandlerBuilder, Module, ModuleMap, RegisterableModule,
@@ -42,21 +41,43 @@ impl BotCommand for LookupAlbum {
             None => bail!("Not found"),
             Some(info) => info,
         };
-        let mut contents = format!(
-            "{}{}\n",
-            info.format_name(),
-            info.release_date
-                .as_deref()
-                .map(|d| format!(" ({d})"))
-                .unwrap_or_default(),
-        );
+        let mut contents = format!("**{}**\n", info.format_name(),);
+
+        let mut add_sep = false;
+        if let Some(duration) = info.duration {
+            add_sep = true;
+            contents.push('*');
+            if duration.num_hours() > 0 {
+                _ = write!(&mut contents, "{}h", duration.num_hours());
+            }
+            let minutes = duration.num_minutes() % 60;
+            let seconds = duration.num_seconds();
+            if minutes > 0 || seconds > 0 {
+                _ = write!(&mut contents, "{minutes:02}m");
+            }
+            if seconds < 60 {
+                _ = write!(&mut contents, "{seconds}s");
+            }
+            contents.push('*');
+        }
+
+        if let Some(release_date) = &info.release_date {
+            if add_sep {
+                _ = write!(&mut contents, " | ");
+            }
+            add_sep = true;
+            _ = write!(&mut contents, "*{release_date}*");
+        }
+
         if info.genres.is_empty()
             && let Some(artist) = &info.artist
         {
             info.genres = handler.module::<Lastfm>()?.artist_top_tags(artist).await?;
         }
-
         if let Some(genres) = info.format_genres() {
+            if add_sep {
+                _ = write!(&mut contents, " | ");
+            }
             _ = writeln!(&mut contents, "{genres}");
         }
         contents.push_str(info.url.as_deref().unwrap_or("no link found"));
@@ -130,12 +151,6 @@ impl AlbumLookup {
 
 #[async_trait]
 impl Module for AlbumLookup {
-    async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
-        db.add_guild_field("create_threads", "BOOLEAN NOT NULL DEFAULT(true)")?;
-        db.add_guild_field("webhook", "STRING")?;
-        Ok(())
-    }
-
     fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
         store.register::<LookupAlbum>();
     }

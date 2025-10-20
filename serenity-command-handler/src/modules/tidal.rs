@@ -158,17 +158,17 @@ impl AlbumProvider for Tidal {
             .find_map(IncludedItem::album)
             .context("album not found")?;
         // get artist name
-        let request_url = format!("{BASE}/albums/{album_id}/relationships/artists");
-        let MultiResponse { data, included } = self
+        let request_url = format!("{BASE}/albums/{album_id}");
+        let Response { data, included } = self
             .request(Method::GET, &request_url)
             .await?
             .query(&[("include", "artists")])
             .send()
             .map_err(anyhow::Error::from)
-            .and_then(parse_response)
+            .and_then(parse_response::<Response<AlbumAttributes>>)
             .await?;
 
-        let album = album.into_album(album_id, &data, included);
+        let album = album.into_album(album_id, &data.relationships.artists.data, included);
         Ok(album)
     }
 
