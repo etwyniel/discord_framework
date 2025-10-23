@@ -541,7 +541,7 @@ impl Lastfm {
         let resp = self.client.get(url).send().await?;
         if resp.status() != StatusCode::OK {
             let map: JsonMap = resp.json().await?;
-            bail!("Error getting top albums: {:?}", map);
+            bail!("Error getting calling API method {method}: {:?}", map);
         }
         resp.json().await.map_err(anyhow::Error::from)
     }

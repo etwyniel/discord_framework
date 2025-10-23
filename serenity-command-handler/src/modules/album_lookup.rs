@@ -13,7 +13,7 @@ use crate::{
     CommandStore, CompletionStore, Handler, HandlerBuilder, Module, ModuleMap, RegisterableModule,
 };
 
-use anyhow::bail;
+use anyhow::Context as _;
 
 #[derive(Command)]
 #[cmd(name = "album", desc = "lookup an album")]
@@ -33,15 +33,22 @@ impl BotCommand for LookupAlbum {
         _ctx: &Context,
         _opts: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let mut info = match handler
-            .module::<AlbumLookup>()?
-            .lookup_album(&self.album, self.provider.as_deref())
-            .await?
-        {
-            None => bail!("Not found"),
-            Some(info) => info,
+        let album_lookup = handler.module::<AlbumLookup>()?;
+        let mut info = if self.album.starts_with("https://") {
+            // command called with a URL, ignore provider param, find appropriate
+            // album provider and fetch metadata
+            let provider = album_lookup
+                .providers
+                .iter()
+                .find(|p| p.url_matches(&self.album))
+                .context("Unable to fetch metadata for this type of link")?;
+            provider.get_from_url(&self.album).await?
+        } else {
+            let provider = album_lookup.get_provider(self.provider.as_deref());
+            provider.query_album(&self.album).await?
         };
-        let mut contents = format!("**{}**\n", info.format_name(),);
+        let mut contents = info.as_linked_header(None);
+        _ = writeln!(&mut contents);
 
         let mut add_sep = false;
         if let Some(duration) = info.duration {
@@ -66,7 +73,7 @@ impl BotCommand for LookupAlbum {
                 _ = write!(&mut contents, " | ");
             }
             add_sep = true;
-            _ = write!(&mut contents, "*{release_date}*");
+            _ = write!(&mut contents, "__*{release_date}*__");
         }
 
         if info.genres.is_empty()
@@ -80,8 +87,14 @@ impl BotCommand for LookupAlbum {
             }
             _ = writeln!(&mut contents, "{genres}");
         }
-        contents.push_str(info.url.as_deref().unwrap_or("no link found"));
-        CommandResponse::public(contents)
+        let mut attachments = Vec::new();
+        if !info.has_rich_embed {
+            contents.push_str(&info.format_tracks(None));
+            attachments.extend(info.cover);
+        }
+        Ok(CommandResponse::Public(
+            serenity_command::ResponseType::WithAttachments(contents, Vec::new(), attachments),
+        ))
     }
 
     fn setup_options(opt_name: &str, opt: CreateCommandOption) -> CreateCommandOption {

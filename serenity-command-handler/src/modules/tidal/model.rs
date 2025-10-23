@@ -1,7 +1,7 @@
 use iso8601_duration::Duration;
 use serde::Deserialize;
 
-use crate::album::Album;
+use crate::album::{Album, Track};
 
 pub const BASE: &str = "https://openapi.tidal.com/v2";
 pub const ALBUM_URL: &str = "https://tidal.com/album";
@@ -21,6 +21,7 @@ pub struct Relationship {
     pub id: String,
     #[serde(rename = "type")]
     pub typ: String,
+    pub meta: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -62,6 +63,12 @@ pub struct ArtworkAttributes {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct TrackAttributes {
+    pub title: String,
+    pub duration: String,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct ResponseData<T> {
     pub id: String,
     #[serde(rename = "type")]
@@ -79,6 +86,8 @@ pub enum IncludedEntity {
     Album(AlbumAttributes),
     #[serde(rename = "artworks")]
     Artwortk(ArtworkAttributes),
+    #[serde(rename = "tracks")]
+    Track(TrackAttributes),
 }
 
 #[derive(Deserialize, Debug)]
@@ -106,6 +115,27 @@ impl IncludedItem {
     pub fn artwork(self) -> Option<(String, ArtworkAttributes)> {
         match self.entity {
             IncludedEntity::Artwortk(a) => Some((self.id, a)),
+            _ => None,
+        }
+    }
+
+    pub fn artwork_ref(&self) -> Option<(&str, &ArtworkAttributes)> {
+        match &self.entity {
+            IncludedEntity::Artwortk(a) => Some((&self.id, &a)),
+            _ => None,
+        }
+    }
+
+    pub fn track(self) -> Option<(String, TrackAttributes)> {
+        match self.entity {
+            IncludedEntity::Track(t) => Some((self.id, t)),
+            _ => None,
+        }
+    }
+
+    pub fn track_ref(&self) -> Option<(&str, &TrackAttributes)> {
+        match &self.entity {
+            IncludedEntity::Track(t) => Some((&self.id, &t)),
             _ => None,
         }
     }
@@ -141,6 +171,7 @@ impl AlbumAttributes {
         self,
         id: String,
         artists: &[Relationship],
+        tracks: &[Relationship],
         included: Vec<IncludedItem>,
     ) -> Album {
         let duration = Duration::parse(&self.duration)
@@ -155,11 +186,26 @@ impl AlbumAttributes {
             });
 
         let cover = included
-            .into_iter()
-            .filter_map(IncludedItem::artwork)
-            .flat_map(|(_, artwork)| artwork.files)
+            .iter()
+            .filter_map(IncludedItem::artwork_ref)
+            .flat_map(|(_, artwork)| &artwork.files)
             .next()
             .map(|file| file.href.clone());
+
+        let tracks = tracks
+            .into_iter()
+            .flat_map(|track| included.iter().find(|inc| inc.id == track.id)?.track_ref())
+            .map(|(id, track)| {
+                let duration = Duration::parse(&track.duration)
+                    .ok()
+                    .and_then(|dur| Duration::to_chrono(&dur));
+                Track {
+                    name: Some(track.title.clone()),
+                    duration,
+                    uri: Some(format!("https://tidal.com/tracks/{id}/u")),
+                }
+            })
+            .collect();
 
         Album {
             name: Some(self.title),
@@ -167,10 +213,26 @@ impl AlbumAttributes {
             duration,
             url: Some(album_share_url(&id)),
             artist,
+            tracks,
 
             is_playlist: false,
+            has_rich_embed: false,
             cover,
             genres: Vec::new(),
         }
+    }
+}
+
+impl Response<AlbumAttributes> {
+    pub fn into_album(self) -> Album {
+        let Response { data, included } = self;
+        let ResponseData {
+            id,
+            attributes,
+            relationships,
+            ..
+        } = data;
+        let AlbumRelationships { artists, items, .. } = relationships;
+        attributes.into_album(id, &artists.data, &items.data, included)
     }
 }

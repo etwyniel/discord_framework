@@ -90,6 +90,7 @@ impl<C: BaseClient> Spotify<C> {
             url: Some(album.id.url()),
             duration: Some(duration),
             cover: album.images.first().map(|img| img.url.clone()),
+            has_rich_embed: true,
             ..Default::default()
         })
     }
@@ -201,6 +202,7 @@ impl<C: BaseClient> AlbumProvider for Spotify<C> {
                     artist: a.artists.first().map(|ar| ar.name.clone()),
                     url: a.id.as_ref().map(|i| i.url()),
                     release_date: a.release_date.clone(),
+                    has_rich_embed: true,
                     ..Default::default()
                 })
                 .ok_or_else(|| anyhow!("Not found"))?)
@@ -263,6 +265,7 @@ impl<C: BaseClient> Spotify<C> {
             artist: a.artists.first().map(|ar| ar.name.clone()),
             url: a.id.as_ref().map(|i| i.url()),
             release_date: a.release_date.clone(),
+            has_rich_embed: true,
             ..Default::default()
         }))
     }

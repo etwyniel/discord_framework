@@ -1,7 +1,11 @@
-use crate::{Module, ModuleMap, RegisterableModule};
-use anyhow::anyhow;
+use std::ops::Deref;
+
+use crate::{Module, ModuleMap, RegisterableModule, album::Track};
+use anyhow::{Context, anyhow};
+use chrono::TimeDelta;
+use itertools::Itertools;
 use reqwest::{Client, Url};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serenity::async_trait;
 
 use crate::album::{Album, AlbumProvider};
@@ -55,12 +59,48 @@ impl AlbumProvider for Bandcamp {
             .and_then(|s| s.trim().split_once(' '))
             .map(|(_, date)| date.to_string());
 
+        let track_selector = Selector::parse(".title-col > .title").unwrap();
+        let tracks = html
+            .select(&track_selector)
+            .map(|track| {
+                track
+                    .text()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .tuples()
+                    .map(|(title, duration)| {
+                        let duration = duration
+                            .split(':')
+                            .map(|s| s.parse::<i64>().unwrap_or_default())
+                            .tuples()
+                            .next()
+                            .map(|(m, s)| TimeDelta::seconds(s) + TimeDelta::minutes(m));
+                        Track {
+                            name: Some(title.to_string()),
+                            duration,
+                            uri: None,
+                        }
+                    })
+                    .next()
+                    .context("track title not found")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let cover_selector = Selector::parse("#tralbumArt > .popupImage").unwrap();
+        let cover = html
+            .select(&cover_selector)
+            .next()
+            .and_then(|a| a.attr("href"))
+            .map(|s| s.to_string());
+
         Ok(Album {
             name: Some(title),
             artist,
             genres,
             url: Some(url.to_string()),
             release_date,
+            tracks,
+            cover,
             ..Default::default()
         })
     }

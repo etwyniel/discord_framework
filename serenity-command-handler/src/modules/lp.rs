@@ -169,13 +169,12 @@ async fn build_message_contents(
 ) -> anyhow::Result<String> {
     let (when, resolved_start) =
         convert_lp_time(lp.time.as_deref(), info.duration, resolved_start)?;
-    let hyperlinked = info.as_link(lp_name);
+    let hyperlinked = info.as_linked_header(lp_name);
     let mut resp_content = format!(
-        "{} {SEPARATOR}{hyperlinked}{SEPARATOR} {}\n",
+        "{} {when}{SEPARATOR}\n{hyperlinked}\n{SEPARATOR}\n",
         role_id // mention role if set
             .map(|id| format!("<@&{id}>"))
             .unwrap_or_else(|| "Listening party: ".to_string()),
-        when
     );
     let mut add_sep = false;
     if let Some(duration) = info.duration {
@@ -199,13 +198,20 @@ async fn build_message_contents(
             resp_content.push_str(" | ");
         }
         add_sep = true;
-        _ = write!(&mut resp_content, "*{release_date}*");
+        _ = write!(&mut resp_content, "__*{release_date}*__");
     }
     if let Some(genres) = info.format_genres() {
         if add_sep {
             resp_content.push_str(" | ");
         }
         _ = write!(&mut resp_content, "{}", &genres);
+    }
+    if !info.has_rich_embed {
+        let track_info = info.format_tracks(Some(10));
+        if !track_info.is_empty() {
+            resp_content.push_str("\n\n");
+            resp_content.push_str(track_info.trim());
+        }
     }
     let resolved = ResolvedLp {
         resolved_start,
@@ -345,7 +351,9 @@ impl BotCommand for Lp {
             let mut create_msg = CreateInteractionResponseMessage::new()
                 .content(resp)
                 .allowed_mentions(CreateAllowedMentions::new().roles(role_id));
-            if let Some(cover) = &info.cover {
+            if let Some(cover) = &info.cover
+                && !info.has_rich_embed
+            {
                 let mut file = CreateAttachment::url(&ctx.http, cover).await?;
                 file.filename = "cover.jpg".to_string();
                 create_msg = create_msg.add_file(file);

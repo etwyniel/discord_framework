@@ -1,7 +1,15 @@
+use std::fmt::Write;
 use std::sync::Arc;
 
 use chrono::Duration;
 use serenity::async_trait;
+
+#[derive(Debug)]
+pub struct Track {
+    pub name: Option<String>,
+    pub duration: Option<chrono::Duration>,
+    pub uri: Option<String>,
+}
 
 #[derive(Debug, Default)]
 pub struct Album {
@@ -13,6 +21,8 @@ pub struct Album {
     pub is_playlist: bool,
     pub duration: Option<Duration>,
     pub cover: Option<String>,
+    pub tracks: Vec<Track>,
+    pub has_rich_embed: bool,
 }
 
 #[async_trait]
@@ -52,6 +62,44 @@ impl Album {
         }
     }
 
+    pub fn format_tracks(&self, limit: Option<usize>) -> String {
+        let n_tracks = self.tracks.len();
+        let mut formatted = String::with_capacity(n_tracks * 15);
+        self.tracks
+            .iter()
+            .take(limit.unwrap_or(100))
+            .enumerate()
+            .for_each(|(i, track)| {
+                _ = write!(
+                    &mut formatted,
+                    "-# {}. {}",
+                    i + 1,
+                    track.name.as_deref().unwrap_or("<no title>"),
+                );
+                let Some(d) = &track.duration else {
+                    formatted.push('\n');
+                    return;
+                };
+                formatted.push_str(" (*");
+                let h = d.num_hours();
+                let m = d.num_minutes() % 60;
+                let s = d.num_seconds() % 60;
+                _ = if h > 0 {
+                    write!(&mut formatted, "{h}:{m:02}:{s:02}")
+                } else {
+                    write!(&mut formatted, "{m}:{s:02}")
+                };
+                formatted.push_str("*)\n");
+            });
+        if let Some(limit) = limit
+            && limit <= n_tracks
+        {
+            let remaining = n_tracks - limit;
+            _ = write!(&mut formatted, "-# +{remaining} more")
+        }
+        formatted
+    }
+
     pub fn as_link(&self, text: Option<&str>) -> String {
         let text = text
             .map(str::to_string)
@@ -61,6 +109,23 @@ impl Album {
         } else {
             text
         }
+    }
+
+    pub fn as_linked_header(&self, text: Option<&str>) -> String {
+        let linked_header = text.or(self.name.as_deref()).unwrap_or("this").to_string();
+        let mut header = if let Some(url) = &self.url {
+            if !self.has_rich_embed {
+                format!("# [{linked_header}](<{url}>)")
+            } else {
+                format!("# [{linked_header}]({url})")
+            }
+        } else {
+            linked_header
+        };
+        if let Some(artist) = &self.artist {
+            _ = write!(&mut header, "\n**{artist}**");
+        }
+        header
     }
 }
 

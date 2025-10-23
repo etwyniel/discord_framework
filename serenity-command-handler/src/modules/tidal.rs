@@ -120,26 +120,17 @@ impl AlbumProvider for Tidal {
         let request_url = format!("{BASE}/albums/{id}");
         self.request(Method::GET, &request_url)
             .await?
-            .query(&[("include", "artists"), ("include", "coverArt")])
+            .query(&[
+                ("include", "artists"),
+                ("include", "coverArt"),
+                ("include", "items"),
+            ])
             .send()
             .map_err(anyhow::Error::from)
             .and_then(parse_response::<Response<AlbumAttributes>>)
             .await
             .context("failed to fetch album metadata from Tidal")
-            .map(
-                |Response {
-                     data:
-                         ResponseData {
-                             id,
-                             attributes,
-                             relationships,
-                             ..
-                         },
-                     included,
-                 }| {
-                    attributes.into_album(id, &relationships.artists.data, included)
-                },
-            )
+            .map(Response::into_album)
     }
 
     async fn query_album(&self, q: &str) -> anyhow::Result<Album> {
@@ -147,29 +138,26 @@ impl AlbumProvider for Tidal {
         let resp: MultiResponse<Relationship> = self
             .request(Method::GET, &request_url)
             .await?
-            .query(&[("include", "albums")])
             .send()
             .map_err(anyhow::Error::from)
             .and_then(parse_response)
             .await?;
-        let (album_id, album) = resp
-            .included
-            .into_iter()
-            .find_map(IncludedItem::album)
-            .context("album not found")?;
-        // get artist name
+        let album_id = &resp.data.first().context("album not found")?.id;
+        // get artist name and track info
         let request_url = format!("{BASE}/albums/{album_id}");
-        let Response { data, included } = self
-            .request(Method::GET, &request_url)
+        self.request(Method::GET, &request_url)
             .await?
-            .query(&[("include", "artists")])
+            .query(&[
+                ("include", "artists"),
+                ("include", "coverArt"),
+                ("include", "items"),
+            ])
             .send()
             .map_err(anyhow::Error::from)
             .and_then(parse_response::<Response<AlbumAttributes>>)
-            .await?;
-
-        let album = album.into_album(album_id, &data.relationships.artists.data, included);
-        Ok(album)
+            .await
+            .context("failed to fetch album metadata from Tidal")
+            .map(Response::into_album)
     }
 
     async fn query_albums(&self, q: &str) -> anyhow::Result<Vec<(String, String)>> {
