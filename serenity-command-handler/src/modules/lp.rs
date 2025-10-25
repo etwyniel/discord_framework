@@ -89,7 +89,7 @@ fn format_end(start: DateTime<Utc>, duration: Option<Duration>) -> String {
         return String::new();
     };
     let end = start.add(duration);
-    format!(", ends at <t:{}:t>", end.timestamp())
+    format!(" -> <t:{}:t>", end.timestamp())
 }
 
 fn convert_lp_time(
@@ -99,14 +99,14 @@ fn convert_lp_time(
 ) -> anyhow::Result<(String, Option<DateTime<Utc>>)> {
     if let (Some(start), None) = (resolved_start, time) {
         let end_str = format_end(start, duration);
-        let formatted = format!("at <t:{0:}:t> (<t:{0:}:R>{end_str})", start.timestamp());
+        let formatted = format!("<t:{0:}:R> (<t:{0:}:t>{end_str})", start.timestamp());
         return Ok((formatted, Some(start)));
     }
     let mut lp_time = Utc::now().add(Duration::seconds(10));
     let time = match time {
         Some("now") | None => {
             let end_str = format_end(lp_time, duration);
-            let formatted = format!("now (<t:{}:R>{end_str})", lp_time.timestamp());
+            let formatted = format!("now (<t:{}:t>{end_str})", lp_time.timestamp());
             return Ok((formatted, Some(lp_time)));
         }
         Some(t) => t,
@@ -135,7 +135,7 @@ fn convert_lp_time(
     let end_str = format_end(lp_time, duration);
     // timestamp and relative time
     Ok((
-        format!("at <t:{0:}:t> (<t:{0:}:R>{end_str})", lp_time.timestamp()),
+        format!("<t:{0:}:R> (<t:{0:}:t>{end_str})", lp_time.timestamp()),
         Some(lp_time),
     ))
 }
@@ -171,7 +171,7 @@ async fn build_message_contents(
         convert_lp_time(lp.time.as_deref(), info.duration, resolved_start)?;
     let hyperlinked = info.as_linked_header(lp_name);
     let mut resp_content = format!(
-        "{} {when}{SEPARATOR}\n{hyperlinked}\n{SEPARATOR}\n",
+        "{}{SEPARATOR}\n{hyperlinked}\n{SEPARATOR}\n{when}\n",
         role_id // mention role if set
             .map(|id| format!("<@&{id}>"))
             .unwrap_or_else(|| "Listening party: ".to_string()),
