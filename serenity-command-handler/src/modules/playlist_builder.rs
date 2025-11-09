@@ -2,7 +2,6 @@ use std::{fmt::Write, ops::Not, sync::Arc};
 
 use anyhow::{Context as _, anyhow, bail};
 use chrono::Utc;
-use google_sheets4::api::ValueRange;
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest::{Url, redirect::Policy};
 use rspotify::{
@@ -21,7 +20,7 @@ use tokio::task::JoinSet;
 use super::forms::Forms;
 use crate::{
     RegisterableModule,
-    modules::{AlbumLookup, SpotifyOAuth},
+    modules::{AlbumLookup, SpotifyOAuth, google_apis::sheets::ValueRange},
     prelude::*,
 };
 use serenity_command::{BotCommand, CommandResponse};
@@ -45,12 +44,10 @@ struct Variables {
 impl Variables {
     async fn get(handler: &Handler, spreadsheet_id: &str) -> anyhow::Result<Self> {
         let forms: &Forms = handler.module()?;
-        let sheets = forms.sheets_client.spreadsheets();
-        let mut var_rows = sheets
-            .values_get(spreadsheet_id, "Variables!A2:D2")
-            .doit()
-            .await?
-            .1;
+        let mut var_rows = forms
+            .sheets
+            .get_range(spreadsheet_id, "Variables!A2:D2")
+            .await?;
         let row = var_rows
             .values
             .take()
@@ -85,7 +82,6 @@ impl Variables {
 
     async fn set(self, handler: &Handler, spreadsheet_id: &str) -> anyhow::Result<()> {
         let forms: &Forms = handler.module()?;
-        let sheets = forms.sheets_client.spreadsheets();
         let values = Some(vec![vec![
             self.last_row.into(),
             self.edition.into(),
@@ -95,10 +91,9 @@ impl Variables {
             values,
             ..Default::default()
         };
-        sheets
-            .values_update(req, spreadsheet_id, "Variables!A2:C2")
-            .value_input_option("USER_ENTERED")
-            .doit()
+        forms
+            .sheets
+            .update_range(spreadsheet_id, "Variables!A2:C2", req)
             .await?;
         Ok(())
     }
@@ -278,13 +273,11 @@ async fn get_playlist_submissions(
     spreadsheet_id: &str,
 ) -> anyhow::Result<Vec<PlaylistPick>> {
     let forms: &Forms = handler.module()?;
-    let sheets = forms.sheets_client.spreadsheets();
-    let rows = sheets
-        .values_get(spreadsheet_id, "Deduplicated!A:C")
-        .doit()
+    let rows = forms
+        .sheets
+        .get_range(spreadsheet_id, "Deduplicated!A:C")
         .await
-        .context("failed to get submissions")?
-        .1;
+        .context("failed to get submissions")?;
     let Some(values) = rows.values else {
         bail!("No submissions found on this sheet");
     };
@@ -347,7 +340,7 @@ async fn build_playlist_from_picks(
         last_playlist: Some(playlist.to_string()),
         current_row: 0, // not used
     };
-    let sheets = handler.module::<Forms>()?.sheets_client.spreadsheets();
+    let forms = handler.module::<Forms>()?;
     let playlist_url = playlist.url();
     if increment_edition {
         let req = ValueRange {
@@ -362,10 +355,9 @@ async fn build_playlist_from_picks(
             ]]),
             ..Default::default()
         };
-        sheets
-            .values_append(req, &spreadsheet_id, "Playlists!A:C")
-            .value_input_option("USER_ENTERED")
-            .doit()
+        forms
+            .sheets
+            .append_range(&spreadsheet_id, "Playlists!A:C", req)
             .await
             .context("failed to add playlist to spreadsheet")?;
     }
@@ -397,10 +389,9 @@ async fn build_playlist_from_picks(
             values: Some(picks_values),
             ..Default::default()
         };
-        sheets
-            .values_append(req, &spreadsheet_id, "Picks!A1:E1")
-            .value_input_option("USER_ENTERED")
-            .doit()
+        forms
+            .sheets
+            .append_range(&spreadsheet_id, "Picks!A1:E1", req)
             .await
             .context("failed to save picks to spreadsheet")?;
     }

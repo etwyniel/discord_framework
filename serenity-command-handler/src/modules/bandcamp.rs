@@ -1,11 +1,9 @@
-use std::ops::Deref;
-
 use crate::{Module, ModuleMap, RegisterableModule, album::Track};
 use anyhow::{Context, anyhow};
 use chrono::TimeDelta;
 use itertools::Itertools;
 use reqwest::{Client, Url};
-use scraper::{ElementRef, Html, Selector};
+use scraper::{Html, Selector};
 use serenity::async_trait;
 
 use crate::album::{Album, AlbumProvider};

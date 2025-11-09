@@ -3,17 +3,6 @@ use std::{cmp::Ordering, sync::Arc};
 use anyhow::{Context as _, anyhow, bail};
 use chrono::Duration;
 use fallible_iterator::FallibleIterator;
-use google_sheets4::{
-    Sheets,
-    hyper::{self},
-    hyper_rustls::{self, HttpsConnector},
-    hyper_util::{
-        self,
-        client::legacy::{self, connect::HttpConnector},
-    },
-    yup_oauth2,
-};
-use hyper::StatusCode;
 use itertools::Itertools;
 use regex::Regex;
 use rspotify::prelude::Id;
@@ -31,12 +20,14 @@ use serenity::{
     },
     prelude::{Context, RwLock},
 };
-use yup_oauth2::{ServiceAccountAuthenticator, authenticator::Authenticator};
 
 use crate::{
     RegisterableModule,
     db::Db,
-    modules::{AlbumLookup, Spotify},
+    modules::{
+        AlbumLookup, Spotify,
+        google_apis::{self, Authenticator, sheets::Sheets},
+    },
     prelude::*,
 };
 use serenity_command::{BotCommand, CommandKey, CommandResponse};
@@ -46,7 +37,7 @@ use super::complete::process_autocomplete;
 
 const DEFAULT_RANGE: &str = "B:Z";
 
-// use crate::{spotify, Handler};
+const SCOPE_FORMS_READONLY: &str = "https://www.googleapis.com/auth/forms.body.readonly";
 
 #[derive(Deserialize, Debug)]
 pub struct Form {
@@ -340,19 +331,16 @@ impl SimpleForm {
 }
 
 pub struct FormsClient {
-    pub authenticator: Authenticator<HttpsConnector<HttpConnector>>,
+    pub authenticator: Authenticator,
 }
 
 impl FormsClient {
     pub async fn get_form(&self, form_id: &str) -> anyhow::Result<SimpleForm> {
-        let token = self
-            .authenticator
-            .token(&["https://www.googleapis.com/auth/forms.body.readonly"])
-            .await?;
+        let token = self.authenticator.get_token().await?;
         let url = format!("https://forms.googleapis.com/v1/forms/{}", form_id);
         let form: Form = reqwest::Client::new()
             .get(url)
-            .bearer_auth(token.token().unwrap())
+            .bearer_auth(token)
             .send()
             .await?
             .json()
@@ -799,7 +787,7 @@ impl SimpleForm {
             .body(form_data)
             .send()
             .await?;
-        if resp.status() != StatusCode::OK {
+        if !resp.status().is_success() {
             bail!("Failed to send response: status {}", resp.status());
         }
 
@@ -827,12 +815,9 @@ impl SimpleForm {
         };
         let rows = handler
             .module::<Forms>()?
-            .sheets_client
-            .spreadsheets()
-            .values_get(sheet_id, range.unwrap_or(DEFAULT_RANGE))
-            .doit()
-            .await?
-            .1;
+            .sheets
+            .get_range(sheet_id, range.unwrap_or(DEFAULT_RANGE))
+            .await?;
         let Some(values) = rows.values else {
             bail!("No submissions found on this sheet");
         };
@@ -905,7 +890,7 @@ impl BotCommand for GetSubmissions {
 }
 
 pub struct Forms {
-    pub sheets_client: Sheets<HttpsConnector<HttpConnector>>,
+    pub sheets: Sheets,
     pub forms_client: FormsClient,
     pub forms: Arc<RwLock<Vec<FormCommand>>>,
 }
@@ -990,27 +975,15 @@ impl RegisterableModule for Forms {
     }
 
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        let conn = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .unwrap()
-            .https_or_http()
-            .enable_http1()
-            .build();
-        let executor = hyper_util::rt::TokioExecutor::new();
-        let client = legacy::Client::builder(executor.clone()).build(conn.clone());
-        let client_secret = yup_oauth2::read_service_account_key(&"credentials.json".to_string())
-            .await
-            .unwrap();
-        let authenticator = ServiceAccountAuthenticator::with_client(client_secret, client.clone())
-            .build()
-            .await
-            .unwrap();
-        let http_client = hyper_util::client::legacy::Client::builder(executor).build(conn);
-        let sheets_client = google_sheets4::api::Sheets::new(http_client, authenticator.clone());
-        let forms_client = FormsClient { authenticator };
+        let credentials = Arc::new(google_apis::Credentials::from_file("credentials.json")?);
+        let sheets = Sheets::new(&credentials);
+        let forms_authenticator = credentials.authenticator(&[SCOPE_FORMS_READONLY]);
+        let forms_client = FormsClient {
+            authenticator: forms_authenticator,
+        };
         let forms = Default::default();
         Ok(Forms {
-            sheets_client,
+            sheets,
             forms_client,
             forms,
         })

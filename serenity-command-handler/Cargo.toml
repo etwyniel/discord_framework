@@ -35,9 +35,11 @@ rand = "0.8.5"
 markov = "1.1.0"
 typemap_rev = "0.4"
 serde_urlencoded = "0.7.1"
-google-sheets4 = "6.0"
 urlencoding = "2.1"
 serde_json = "1.0"
 serde_derive = "1.0"
 iso8601-duration = { version = "0.2.0", features = ["chrono"] }
 http-body-util = "0.1"
+base64 = "0.22.1"
+rsa = "0.9.8"
+sha2 = { version = "0.10", features = ["oid"] }
