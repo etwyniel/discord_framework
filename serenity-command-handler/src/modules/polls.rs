@@ -10,9 +10,9 @@ use serenity::builder::{
     EditInteractionResponse, EditMessage,
 };
 use serenity::http::Http;
-use serenity::model::id::MessageId;
+use serenity::model::id::{GenericChannelId, MessageId};
 use serenity::model::prelude::CommandInteraction;
-use serenity::model::prelude::{ChannelId, Message, Reaction, ReactionType, UserId};
+use serenity::model::prelude::{Message, Reaction, ReactionType, UserId};
 use serenity::{async_trait, prelude::Context};
 use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
@@ -400,14 +400,14 @@ async fn poll_task(
 
 #[derive(Debug)]
 pub struct ReadyPollStarted {
-    pub channel: ChannelId,
+    pub channel: GenericChannelId,
 }
 
 // performs the actual countdown
 pub async fn crabdown(
     module: Arc<ModPoll>,
     http: &Http,
-    channel: ChannelId,
+    channel: GenericChannelId,
     count_emote: Option<&str>,
     go_emote: Option<&str>,
     event_handler: &events::EventHandlers,

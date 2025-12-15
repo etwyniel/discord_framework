@@ -121,7 +121,7 @@ impl IncludedItem {
 
     pub fn artwork_ref(&self) -> Option<(&str, &ArtworkAttributes)> {
         match &self.entity {
-            IncludedEntity::Artwortk(a) => Some((&self.id, &a)),
+            IncludedEntity::Artwortk(a) => Some((&self.id, a)),
             _ => None,
         }
     }
@@ -135,7 +135,7 @@ impl IncludedItem {
 
     pub fn track_ref(&self) -> Option<(&str, &TrackAttributes)> {
         match &self.entity {
-            IncludedEntity::Track(t) => Some((&self.id, &t)),
+            IncludedEntity::Track(t) => Some((&self.id, t)),
             _ => None,
         }
     }
@@ -193,7 +193,7 @@ impl AlbumAttributes {
             .map(|file| file.href.clone());
 
         let tracks = tracks
-            .into_iter()
+            .iter()
             .flat_map(|track| included.iter().find(|inc| inc.id == track.id)?.track_ref())
             .map(|(id, track)| {
                 let duration = Duration::parse(&track.duration)

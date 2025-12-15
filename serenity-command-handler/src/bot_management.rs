@@ -2,8 +2,8 @@ use anyhow::Context as _;
 use futures::{FutureExt, future::BoxFuture};
 use serenity::{
     all::{
-        CommandInteraction, Context, CreateAutocompleteResponse, CreateInteractionResponse,
-        GuildId, GuildPagination, Permissions,
+        AutocompleteChoice, CommandInteraction, Context, CreateAutocompleteResponse,
+        CreateInteractionResponse, GuildId, GuildPagination, Permissions,
     },
     async_trait,
 };
@@ -59,7 +59,7 @@ impl BotCommand for EnableCommandForGuild {
             .await
             .set_command_enabled_for_guild(&self.command, guild, true)?;
         // register command in target guild
-        guild.create_command(&ctx, runner.register()).await?;
+        guild.create_command(&ctx.http, runner.register()).await?;
         CommandResponse::public(format!(
             "Enabled command '{}' for guild with id `{}`",
             &self.command, self.guild
@@ -112,11 +112,11 @@ impl BotCommand for DisableCommandForGuild {
             .await
             .set_command_enabled_for_guild(&self.command, guild, false)?;
         // unregister command in target guild
-        for command in guild.get_commands(&ctx).await? {
+        for command in guild.get_commands(&ctx.http).await? {
             if command.name != self.command {
                 continue;
             }
-            guild.delete_command(&ctx, command.id).await?;
+            guild.delete_command(&ctx.http, command.id).await?;
             break;
         }
         CommandResponse::public(format!(
@@ -166,9 +166,9 @@ impl ModManagement {
                 let resp = choices
                     .into_iter()
                     .fold(CreateAutocompleteResponse::new(), |resp, (id, name)| {
-                        resp.add_string_choice(name, id)
+                        resp.add_choice(AutocompleteChoice::new(name, id))
                     });
-                ac.create_response(&ctx, CreateInteractionResponse::Autocomplete(resp))
+                ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
                     .await?;
             }
             if focused == "command" {
@@ -186,9 +186,9 @@ impl ModManagement {
                 let resp = choices
                     .into_iter()
                     .fold(CreateAutocompleteResponse::new(), |resp, command| {
-                        resp.add_string_choice(command.clone(), command)
+                        resp.add_choice(command)
                     });
-                ac.create_response(&ctx, CreateInteractionResponse::Autocomplete(resp))
+                ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
                     .await?;
             }
             Ok(true)

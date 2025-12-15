@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use base64::{Engine, prelude::BASE64_URL_SAFE};
@@ -27,25 +27,25 @@ pub struct Credentials {
 }
 
 #[derive(Serialize)]
-enum JWTAlg {
+enum JwtAlg {
     RS256,
 }
 
 #[derive(Serialize)]
-enum JWTType {
-    JWT,
+enum JwtType {
+    Jwt,
 }
 
 #[derive(Serialize)]
-struct JWTHeader<'a> {
-    alg: JWTAlg,
-    typ: JWTType,
+struct JwtHeader<'a> {
+    alg: JwtAlg,
+    typ: JwtType,
     kid: &'a str,
 }
 
 #[derive(Serialize)]
 
-struct JWTClaims<'a> {
+struct JwtClaims<'a> {
     iss: &'a str,
     scope: &'a str,
     aud: &'a str,
@@ -68,25 +68,28 @@ pub struct AccessToken {
     exp: DateTime<Utc>,
 }
 
-impl Credentials {
-    pub fn from_str(serialized: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(serialized)
+impl FromStr for Credentials {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
     }
+}
 
+impl Credentials {
     pub fn from_file<P: AsRef<Path>>(filename: P) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(filename.as_ref())?;
         Self::from_str(&contents).map_err(Into::into)
     }
 
     fn build_jwt(&self, scopes: &[&str]) -> anyhow::Result<String> {
-        let header = JWTHeader {
-            alg: JWTAlg::RS256,
-            typ: JWTType::JWT,
+        let header = JwtHeader {
+            alg: JwtAlg::RS256,
+            typ: JwtType::Jwt,
             kid: &self.private_key_id,
         };
         let now = Utc::now();
         let exp = now + Duration::hours(1);
-        let claims = JWTClaims {
+        let claims = JwtClaims {
             iss: &self.client_email,
             scope: &scopes.join(" "),
             aud: &self.token_uri,
@@ -164,7 +167,7 @@ impl Authenticator {
             return Ok(token.access_token.clone());
         }
 
-        let new_token = self.credentials.request_token(&self.scopes).await?;
+        let new_token = self.credentials.request_token(self.scopes).await?;
         let res = new_token.access_token.clone();
         *write_lock = Some(new_token);
         Ok(res)

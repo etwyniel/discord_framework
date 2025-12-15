@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use chrono::{Datelike, Local, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
 use rusqlite::params;
-use serenity::all::ChannelId;
+use serenity::all::{ChannelId, UserId};
 use serenity::builder::{CreateCommandOption, CreateEmbed, CreateEmbedAuthor};
 use serenity::http::Http;
 use serenity::model::prelude::CommandInteraction;
@@ -97,7 +97,7 @@ impl BotCommand for GetBdays {
             .map(|b| format!("`{:02}/{:02}` • <@{}>", b.day, b.month, b.user_id))
             .collect::<Vec<_>>()
             .join("\n");
-        let header = if let Some(server) = opts.guild_id.and_then(|g| g.name(ctx)) {
+        let header = if let Some(server) = opts.guild_id.and_then(|g| g.name(&ctx.cache)) {
             format!("Birthdays in {server}")
         } else {
             "Birthdays".to_string()
@@ -146,7 +146,10 @@ impl BotCommand for SetBday {
         CommandResponse::private("Birthday set!")
     }
 
-    fn setup_options(opt_name: &'static str, mut opt: CreateCommandOption) -> CreateCommandOption {
+    fn setup_options(
+        opt_name: &'static str,
+        mut opt: CreateCommandOption<'static>,
+    ) -> CreateCommandOption<'static> {
         match opt_name {
             "day" => {
                 opt = opt.min_int_value(1).max_int_value(31);
@@ -167,7 +170,7 @@ impl BotCommand for SetBday {
                     "December",
                 ];
                 opt = MONTHS.iter().enumerate().fold(opt, |opt, (n, &month)| {
-                    opt.add_int_choice(month, n as i32 + 1)
+                    opt.add_int_choice(month, n as i64 + 1)
                 });
             }
             _ => {}
@@ -182,19 +185,20 @@ async fn wish_bday(
     guild_id: GuildId,
     channel: Option<u64>,
 ) -> anyhow::Result<()> {
-    let member = guild_id.member(http, user_id).await?;
+    let member = guild_id.member(http, UserId::new(user_id)).await?;
     let channels = guild_id.channels(http).await?;
     let channel = if let Some(channel_id) = channel {
         ChannelId::new(channel_id)
     } else {
         channels
-            .values()
-            .find(|chan| chan.name() == "general")
-            .or_else(|| channels.values().find(|chan| chan.position == 0))
+            .iter()
+            .find(|chan| chan.base.name == "general")
+            .or_else(|| channels.iter().find(|chan| chan.position == 0))
             .ok_or_else(|| anyhow!("Could not find a suitable channel"))?
             .id
     };
     channel
+        .widen()
         .say(
             http,
             format!("Happy birthday to <@{}>!", member.user.id.get()),

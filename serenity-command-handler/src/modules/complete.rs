@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 
 use anyhow::anyhow;
-use serenity::all::CommandInteraction;
+use serenity::all::{AutocompleteChoice, CommandInteraction};
 use serenity::builder::{CreateAutocompleteResponse, CreateInteractionResponse};
 use serenity::model::prelude::UserId;
 
@@ -134,7 +134,7 @@ pub async fn process_autocomplete(
             .into_iter()
             .fold(CreateAutocompleteResponse::new(), |resp, (name, value)| {
                 let len = 100.min(name.len());
-                resp.add_string_choice(&name[..len], value)
+                resp.add_choice(AutocompleteChoice::new(name[..len].to_string(), value))
             });
     ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
         .await?;

@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::{
-    parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, FieldsNamed,
-    FieldsUnnamed, GenericArgument, Lit, Meta, NestedMeta, PathArguments, Type,
+    Attribute, Data, DeriveInput, Fields, FieldsNamed, FieldsUnnamed, GenericArgument, Lit, Meta,
+    NestedMeta, PathArguments, Type, parse_macro_input, spanned::Spanned,
 };
 
 struct Attr {
@@ -103,11 +103,11 @@ fn analyze_message_command_fields(
             return Err(syn::Error::new(
                 ident.span(),
                 "Command on messages must have one field of type message",
-            ))
+            ));
         }
     };
     Ok(
-        quote!(if let Some(msg) = opts.resolved.messages.values().next() {
+        quote!(if let Some(msg) = opts.resolved.messages.iter().next() {
             #setter
         } else {
             panic!("No message received for message command")
@@ -181,12 +181,14 @@ fn analyze_field(
                     return Err(syn::Error::new(
                         ident.span(),
                         format!("Unsupported type {other}"),
-                    ))
+                    ));
                 }
             };
             let cast = if let "i64" | "u64" | "usize" | "isize" | "u32" | "i32" = parts_str {
                 let id = Ident::new(parts_str, Span::call_site());
                 quote!( as #id )
+            } else if let "String" | "std::str::String" = parts_str {
+                quote!(.to_string())
             } else {
                 quote!()
             };
@@ -254,7 +256,7 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             return Err(syn::Error::new(
                 ident.span(),
                 "Derive target must be a struct",
-            ))
+            ));
         }
     };
     let attr_name = get_attr_value(&attrs, "name")?;
@@ -283,7 +285,7 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 return Err(syn::Error::new(
                     ident.span(),
                     "Derive target must use named fields",
-                ))
+                ));
             }
         };
         let field_names = fields.named.iter().flat_map(|f| f.ident.as_ref());
@@ -304,8 +306,8 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let app_command = quote!(serenity::model::application);
     let data_ident = quote!(<#ident as serenity_command::BotCommand>::Data);
     Ok(quote!(
-            impl<'a> From<&'a #app_command::CommandData> for #ident {
-                fn from(opts: &'a #app_command::CommandData) -> Self {
+            impl From<&'_ #app_command::CommandData> for #ident {
+                fn from(opts: &'_ #app_command::CommandData) -> Self {
                     #constructor
                 }
             }
@@ -328,7 +330,7 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     (<#ident as serenity_command::CommandBuilder>::NAME, <#ident as serenity_command::CommandBuilder>::TYPE)
                 }
 
-                fn register<'a>(&self) -> serenity::builder::CreateCommand {
+                fn register(&self) -> serenity::builder::CreateCommand<'static> {
                     use serenity_command::CommandBuilder;
                     let mut builder = serenity::builder::CreateCommand::new(<#ident as serenity_command::CommandBuilder>::NAME);
                     builder = #ident::create_extras(builder, <#ident as serenity_command::BotCommand>::setup_options);
@@ -351,21 +353,21 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 }
             }
 
-        impl<'a> serenity_command::CommandBuilder<'a> for #ident {
-        fn create_extras<E: Fn(&'static str, serenity::builder::CreateCommandOption) -> serenity::builder::CreateCommandOption>(
-            mut builder: serenity::builder::CreateCommand,
+        impl serenity_command::CommandBuilder<'_> for #ident {
+        fn create_extras<E: Fn(&'static str, serenity::builder::CreateCommandOption<'static>) -> serenity::builder::CreateCommandOption<'static>>(
+            mut builder: serenity::builder::CreateCommand<'static>,
             extras: E
-        ) -> serenity::builder::CreateCommand {
+        ) -> serenity::builder::CreateCommand<'static> {
             #set_desc
             builder = builder.name(#name);
             #(#builders)*
             builder
         }
 
-        fn create(builder: serenity::builder::CreateCommand)
-            -> serenity::builder::CreateCommand
+        fn create(builder: serenity::builder::CreateCommand<'static>)
+            -> serenity::builder::CreateCommand<'static>
         {
-            let extras = |_: &'static str, opt: serenity::builder::CreateCommandOption| {opt};
+            let extras = |_: &'static str, opt: serenity::builder::CreateCommandOption<'static>| {opt};
             Self::create_extras(builder, extras)
         }
 

@@ -5,3 +5,16 @@ members = [
     "serenity-command-derive",
     "serenity-command-handler"
 ]
+
+[workspace.dependencies.serenity]
+# version = "0.12"
+git = "https://github.com/serenity-rs/serenity"
+branch = "next"
+default-features = false
+features = [
+    # "client",
+    "gateway",
+    "rustls_backend",
+    "model",
+    "cache",
+]

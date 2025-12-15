@@ -4,6 +4,7 @@ use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Instant};
 use anyhow::{anyhow, bail};
 use bot_management::ModManagement;
 use rusqlite::Connection;
+pub use serenity; // re-export
 use serenity::model::prelude::{GuildId, UserId};
 use serenity::{
     async_trait,
@@ -12,9 +13,10 @@ use serenity::{
     model::application::{
         CommandDataOption, CommandDataOptionValue, CommandInteraction, Interaction,
     },
-    prelude::{Context, Mutex, RwLock, TypeMap, TypeMapKey},
+    prelude::{Context, Mutex, RwLock},
 };
 use tokio::sync::OnceCell;
+use typemap_rev::{TypeMap, TypeMapKey};
 
 use serenity_command::{CommandKey, CommandResponse};
 
@@ -162,7 +164,7 @@ impl Handler {
         }
     }
 
-    pub async fn process_interaction(&self, ctx: Context, interaction: Interaction) {
+    pub async fn process_interaction(&self, ctx: &Context, interaction: &Interaction) {
         if let Interaction::Autocomplete(ac) = interaction {
             let name = ac.data.name.clone();
             let key = (name.as_str(), ac.data.kind);

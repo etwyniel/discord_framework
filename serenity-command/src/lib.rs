@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use serenity::async_trait;
 use serenity::builder::{CreateCommand, CreateCommandOption};
+use serenity::model::Permissions;
 use serenity::model::application::{CommandData, CommandInteraction, CommandType};
 use serenity::model::prelude::GuildId;
-use serenity::model::Permissions;
 use serenity::prelude::Context;
 
 mod command_response;
@@ -39,7 +39,10 @@ pub trait BotCommand {
         interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse>;
 
-    fn setup_options(_opt_name: &'static str, opt: CreateCommandOption) -> CreateCommandOption {
+    fn setup_options(
+        _opt_name: &'static str,
+        opt: CreateCommandOption<'static>,
+    ) -> CreateCommandOption<'static> {
         opt
     }
 
@@ -50,11 +53,13 @@ pub trait BotCommand {
 }
 
 pub trait CommandBuilder<'a>: BotCommand + From<&'a CommandData> + 'static {
-    fn create_extras<E: Fn(&'static str, CreateCommandOption) -> CreateCommandOption>(
-        builder: CreateCommand,
+    fn create_extras<
+        E: Fn(&'static str, CreateCommandOption<'static>) -> CreateCommandOption<'static>,
+    >(
+        builder: CreateCommand<'static>,
         extras: E,
-    ) -> CreateCommand;
-    fn create(builder: CreateCommand) -> CreateCommand;
+    ) -> CreateCommand<'static>;
+    fn create(builder: CreateCommand<'static>) -> CreateCommand<'static>;
     const NAME: &'static str;
     const TYPE: CommandType = CommandType::ChatInput;
     fn runner() -> Box<dyn CommandRunner<Self::Data> + Send + Sync>;
@@ -69,7 +74,7 @@ pub trait CommandRunner<T> {
         interaction: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse>;
     fn name(&self) -> CommandKey<'static>;
-    fn register(&self) -> CreateCommand;
+    fn register(&self) -> CreateCommand<'static>;
 
     fn guild(&self) -> Option<GuildId> {
         None

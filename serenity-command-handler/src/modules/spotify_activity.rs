@@ -22,11 +22,13 @@ fn get_now_playing(presence: &Presence) -> Option<NowPlaying> {
         .activities
         .iter()
         .find(|act| act.kind == ActivityType::Listening && act.name == "Spotify")?;
-    let track_id = TrackId::from_id(act.sync_id.as_deref()?)
-        .ok()?
-        .into_static();
-    let end = act.timestamps.as_ref()?.end?;
-    Some(NowPlaying { track_id, end })
+    dbg!(&act);
+    unimplemented!();
+    // let track_id = TrackId::from_id(act.sync_id.as_deref()?)
+    //     .ok()?
+    //     .into_static();
+    // let end = act.timestamps.as_ref()?.end?;
+    // Some(NowPlaying { track_id, end })
 }
 
 impl SpotifyActivity {

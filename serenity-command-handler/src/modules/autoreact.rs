@@ -1,22 +1,25 @@
 use std::{collections::HashMap, str::FromStr};
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use fallible_iterator::FallibleIterator;
-use futures::{future::BoxFuture, FutureExt};
-use rusqlite::{params, Connection};
+use futures::{FutureExt, future::BoxFuture};
+use rusqlite::{Connection, params};
 use serenity::{
+    all::AutocompleteChoice,
     async_trait,
     builder::{CreateAutocompleteResponse, CreateInteractionResponse},
-    model::application::CommandType,
-    model::prelude::{CommandInteraction, Message, Permissions, ReactionType},
+    model::{
+        application::CommandType,
+        prelude::{CommandInteraction, Message, Permissions, ReactionType},
+    },
     prelude::{Context, RwLock},
 };
 
 use crate::{
+    RegisterableModule,
     command_context::{get_focused_option, get_str_opt_ac},
     db::Db,
     prelude::*,
-    RegisterableModule,
 };
 use serenity_command::{BotCommand, CommandKey, CommandResponse};
 use serenity_command_derive::Command;
@@ -276,7 +279,7 @@ impl ModAutoreacts {
                 .map(|(trigger, emote)| if focused == "trigger" { trigger } else { emote })
                 .map(|v| (v.clone(), v));
             let resp = it.fold(CreateAutocompleteResponse::new(), |resp, (name, value)| {
-                resp.add_string_choice(name, value)
+                resp.add_choice(AutocompleteChoice::new(name, value))
             });
             ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
                 .await?;

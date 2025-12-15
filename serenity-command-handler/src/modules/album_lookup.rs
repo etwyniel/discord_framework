@@ -90,14 +90,17 @@ impl BotCommand for LookupAlbum {
         let mut attachments = Vec::new();
         if !info.has_rich_embed {
             contents.push_str(&info.format_tracks(None));
-            attachments.extend(info.cover);
+            attachments.extend(info.cover.map(|url| (url, "cover.jpg".to_string())));
         }
         Ok(CommandResponse::Public(
             serenity_command::ResponseType::WithAttachments(contents, Vec::new(), attachments),
         ))
     }
 
-    fn setup_options(opt_name: &str, opt: CreateCommandOption) -> CreateCommandOption {
+    fn setup_options(
+        opt_name: &str,
+        opt: CreateCommandOption<'static>,
+    ) -> CreateCommandOption<'static> {
         if opt_name == "provider" {
             opt.add_string_choice("spotify", "spotify")
                 .add_string_choice("bandcamp", "bandcamp")

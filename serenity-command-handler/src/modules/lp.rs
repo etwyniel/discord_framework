@@ -15,11 +15,11 @@ use regex::Regex;
 use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
-use serenity::all::AutoArchiveDuration;
 use serenity::all::CreateAttachment;
 use serenity::all::CreateInteractionResponseMessage;
 use serenity::all::Message;
-use serenity::all::RoleId;
+use serenity::all::{AutoArchiveDuration, AutocompleteChoice};
+use serenity::all::{Channel, RoleId};
 use serenity::async_trait;
 use serenity::builder::CreateAllowedMentions;
 use serenity::builder::CreateAutocompleteResponse;
@@ -30,13 +30,13 @@ use serenity::builder::EditMessage;
 use serenity::builder::EditThread;
 use serenity::builder::ExecuteWebhook;
 use serenity::builder::GetMessages;
-use serenity::client::Context;
 use serenity::model::Permissions;
 use serenity::model::application::CommandDataOption;
 use serenity::model::application::CommandType;
 use serenity::model::channel::ChannelType;
 use serenity::model::id::GuildId;
 use serenity::model::prelude::CommandInteraction;
+use serenity::prelude::Context;
 use serenity_command_derive::Command;
 
 use crate::album::Album;
@@ -276,6 +276,8 @@ impl Lp {
             role,
             ..
         } = &self;
+        let album = album.trim();
+        let link = link.as_deref().map(str::trim);
         let (lp_name, mut info) =
             find_album(handler, album, link.as_deref(), provider.as_deref()).await?;
         let lp_name = lp_name.map(|s| s.to_string());
@@ -318,25 +320,30 @@ impl BotCommand for Lp {
             Some(fut) => Some(fut.await?),
             None => None,
         };
+        let roles = if let Some(r) = role_id {
+            vec![RoleId::new(r)]
+        } else {
+            Vec::new()
+        };
         let message = if let Some(wh) = &wh {
             // Send LP message through webhook
             // This lets us impersonate the user who sent the command
             let user = &command.user;
             let avatar_url = GuildId::new(guild_id)
-                .member(http, user)
+                .member(http, user.id)
                 .await?
                 .avatar_url()
                 .or_else(|| user.avatar_url());
             let nick = user // try to get the user's nickname
-                .nick_in(http, guild_id)
+                .nick_in(http, GuildId::new(guild_id))
                 .await
                 .map(Cow::Owned)
-                .unwrap_or_else(|| Cow::Borrowed(&user.name));
+                .unwrap_or_else(|| Cow::Borrowed(user.name.as_str()));
             wh.execute(http, true, {
                 let mut webhook = ExecuteWebhook::new()
                     .content(&resp_content)
-                    .allowed_mentions(CreateAllowedMentions::new().roles(role_id))
-                    .username(nick.as_str());
+                    .allowed_mentions(CreateAllowedMentions::new().roles(roles))
+                    .username(nick);
                 if let Some(url) = avatar_url.as_ref() {
                     webhook = webhook.avatar_url(url);
                 }
@@ -350,12 +357,11 @@ impl BotCommand for Lp {
             // Create interaction response
             let mut create_msg = CreateInteractionResponseMessage::new()
                 .content(resp)
-                .allowed_mentions(CreateAllowedMentions::new().roles(role_id));
+                .allowed_mentions(CreateAllowedMentions::new().roles(roles));
             if let Some(cover) = &info.cover
                 && !info.has_rich_embed
             {
-                let mut file = CreateAttachment::url(&ctx.http, cover).await?;
-                file.filename = "cover.jpg".to_string();
+                let file = CreateAttachment::url(&ctx.http, cover, "cover.jpg").await?;
                 create_msg = create_msg.add_file(file);
             }
             command
@@ -369,23 +375,24 @@ impl BotCommand for Lp {
         );
         if handler.get_guild_field(guild_id, "create_threads").await? {
             // Create a thread from the response message for the LP to take place in
-            let chan = message.channel(http).await?;
+            let mut chan = message.channel(http).await?;
             let mut thread_name = info.name.as_deref().unwrap_or("Listening party");
             if thread_name.len() > 100 {
                 thread_name = &thread_name[..100];
             }
-            let mut guild_chan = chan.guild().map(|c| (c.kind, c));
-            if let (None, Some((ChannelType::PublicThread, c))) = (&webhook, &mut guild_chan) {
+            if let (None, Channel::GuildThread(thread)) = (&webhook, &mut chan) {
                 // If we're already in a thread, just rename it
                 // unless we are using a webhook, in which case we can create a new thread
-                c.edit_thread(http, EditThread::new().name(thread_name))
+                thread
+                    .edit(http, EditThread::new().name(thread_name))
                     .await?;
-            } else if let Some((ChannelType::Text, c)) = &guild_chan {
+            } else if let Channel::Guild(channel) = &chan {
                 // Create thread from response message
-                let thread = c
+                let thread = channel
+                    .id
                     .create_thread_from_message(
                         http,
-                        message,
+                        message.id,
                         CreateThread::new(thread_name)
                             .kind(ChannelType::PublicThread)
                             .auto_archive_duration(AutoArchiveDuration::OneHour),
@@ -396,7 +403,7 @@ impl BotCommand for Lp {
         }
         if let Some(wh) = wh {
             // If we used a webhook, we still need to create the interaction response
-            let response = if wh.channel_id == Some(command.channel_id) {
+            let response = if wh.channel_id.map(|id| id.get()) == Some(command.channel_id.get()) {
                 CommandResponse::Private(response.into())
             } else {
                 CommandResponse::Public(response.into())
@@ -406,7 +413,10 @@ impl BotCommand for Lp {
         Ok(CommandResponse::None)
     }
 
-    fn setup_options(opt_name: &str, opt: CreateCommandOption) -> CreateCommandOption {
+    fn setup_options(
+        opt_name: &str,
+        opt: CreateCommandOption<'static>,
+    ) -> CreateCommandOption<'static> {
         if opt_name == "provider" {
             opt.add_string_choice("spotify", "spotify")
                 .add_string_choice("bandcamp", "bandcamp")
@@ -561,9 +571,10 @@ impl EditLp {
         let contents = format!("<@{}>: {contents}", command.user.id.get());
         msg.edit(
             &ctx.http,
-            EditMessage::new()
-                .content(contents)
-                .allowed_mentions(CreateAllowedMentions::new().roles(role_id)),
+            EditMessage::new().content(contents).allowed_mentions(
+                CreateAllowedMentions::new()
+                    .roles(role_id.map(|id| vec![RoleId::new(id)]).unwrap_or_default()),
+            ),
         )
         .await?;
         // build response to indicate what was updated
@@ -646,8 +657,11 @@ impl BotCommand for EditLp {
         if resp.is_empty() {
             bail!("Nothing to change")
         }
-        msg.edit(&ctx.http, EditMessage::new().content(new_content))
-            .await?;
+        msg.edit(
+            &ctx.http,
+            EditMessage::new().content(new_content.into_owned()),
+        )
+        .await?;
         return CommandResponse::public(resp);
     }
 }
@@ -710,7 +724,7 @@ impl ModLp {
                 .into_iter()
                 .filter(|(_, value)| value.len() < 100)
                 .fold(CreateAutocompleteResponse::new(), |resp, (name, value)| {
-                    resp.add_string_choice(name, value)
+                    resp.add_choice(AutocompleteChoice::new(name, value))
                 });
             ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
                 .await?;

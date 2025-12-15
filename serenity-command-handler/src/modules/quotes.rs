@@ -3,21 +3,25 @@ use std::{
     cmp::{Eq, PartialEq},
     collections::HashSet,
     fmt::Write,
-    hash::Hash,
+    hash::{Hash, Hasher},
+    str::FromStr,
     sync::Arc,
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{Context as _, anyhow, bail};
 use chrono::{DateTime, Local, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use itertools::Itertools;
 use rand::random;
 use regex::Regex;
-use rusqlite::{params, Error::SqliteFailure, ErrorCode};
+use rusqlite::{Error::SqliteFailure, ErrorCode, params};
 use serenity::{
-    all::{AutoArchiveDuration, CreateAttachment, CreateMessage, CreateThread, Http},
+    all::{
+        AutoArchiveDuration, AutocompleteChoice, CreateAttachment, CreateMessage, CreateThread,
+        Http,
+    },
     async_trait,
     builder::{
         CreateAutocompleteResponse, CreateCommandOption, CreateEmbed, CreateEmbedAuthor,
@@ -49,9 +53,9 @@ pub async fn message_to_quote_contents(
     let quote_ndx = message
         .reactions
         .iter()
-        .find_position(|r| r.reaction_type == ReactionType::Unicode("🗨️".to_string()))
+        .find_position(|r| r.reaction_type == ReactionType::from_str("🗨️").unwrap())
         .map(|(ndx, _)| ndx)
-        .unwrap_or(message.reactions.len());
+        .unwrap_or(message.reactions.len() as usize);
     let prev_react = message
         .reactions
         .get(quote_ndx.wrapping_sub(1))
@@ -67,13 +71,15 @@ pub async fn message_to_quote_contents(
                 .await?
                 .guild()
                 .unwrap()
+                .id
+                .widen()
                 .messages(http, GetMessages::new().before(message.id).limit(num as u8))
                 .await?;
             messages.extend(
                 before
                     .iter()
                     .rev()
-                    .map(|msg| (msg.content.clone(), msg.author.id.get())),
+                    .map(|msg| (msg.content.to_string(), msg.author.id.get())),
             );
         }
     }
@@ -82,10 +88,10 @@ pub async fn message_to_quote_contents(
             message
                 .referenced_message
                 .as_ref()
-                .map(|msg| (msg.content.clone(), msg.author.id.get())),
+                .map(|msg| (msg.content.to_string(), msg.author.id.get())),
         );
     }
-    messages.push((message.content.clone(), message.author.id.get()));
+    messages.push((message.content.to_string(), message.author.id.get()));
     let mut contents = String::new();
     let mut prev_author = messages.first().unwrap().1;
     for (msg, author) in messages {
@@ -110,6 +116,7 @@ pub enum AttachmentType {
 pub struct Attachment {
     pub ty: AttachmentType,
     pub url: String,
+    pub name: Option<String>,
 }
 
 pub struct Quote {
@@ -153,7 +160,7 @@ pub fn fetch_quote(db: &Db, guild_id: u64, quote_number: u64) -> anyhow::Result<
         Err(e) => return Err(e).context("Error fetching quote"),
     };
     let mut qry = db.conn().prepare(
-        "SELECT type, url FROM quote_attachments WHERE guild_id = ?1 AND quote_number = ?2 ORDER BY ndx",
+        "SELECT type, url, name FROM quote_attachments WHERE guild_id = ?1 AND quote_number = ?2 ORDER BY ndx",
     )?;
     let attachments = qry.query_map([guild_id, quote_number], |row| {
         let ty = match row
@@ -171,6 +178,7 @@ pub fn fetch_quote(db: &Db, guild_id: u64, quote_number: u64) -> anyhow::Result<
         Ok(Attachment {
             ty,
             url: row.get(1)?,
+            name: row.get(2)?,
         })
     })?;
     for attachment in attachments {
@@ -212,7 +220,7 @@ pub async fn add_quote(
             ts.unix_timestamp(),
             quote_number,
             author_id,
-            author_name,
+            author_name.as_str(),
             contents.trim(),
         ],
     ) {
@@ -226,12 +234,13 @@ pub async fn add_quote(
         (
             att.content_type.as_deref().unwrap_or_default(),
             att.url.as_str(),
+            att.filename.as_str(),
         )
     });
-    for (ndx, (ty, url)) in attachments.enumerate() {
+    for (ndx, (ty, url, name)) in attachments.enumerate() {
         tx.execute(
-            "INSERT INTO quote_attachments (guild_id, quote_number, type, url, ndx) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![guild_id, quote_number, ty, url, ndx],
+            "INSERT INTO quote_attachments (guild_id, quote_number, type, url, ndx, name) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![guild_id, quote_number, ty, url, ndx, name],
         )?;
     }
     tx.commit()?;
@@ -260,26 +269,33 @@ pub fn get_random_quote(
 }
 
 #[derive(Clone)]
-pub struct CaseInsensitiveString<'a>(Cow<'a, str>);
+pub struct CaseInsensitiveString<'a>(Cow<'a, str>, u64);
 
 impl CaseInsensitiveString<'_> {
-    fn simplify_bytes(&self) -> impl Iterator<Item = u8> + '_ {
-        self.0
-            .bytes()
-            .filter(|b| !"\".,?-!&:*$%#(){}<>'; \t\n|".as_bytes().contains(b))
+    fn new<'a, T: Into<Cow<'a, str>>>(s: T) -> CaseInsensitiveString<'a> {
+        let s = s.into();
+        let mut hasher = std::hash::DefaultHasher::new();
+        s.bytes()
+            .filter(|b| !SEPARATORS.as_bytes().contains(b))
             .map(|b| b.to_ascii_lowercase())
+            .for_each(|c| hasher.write_u8(c));
+        CaseInsensitiveString(s, hasher.finish())
+    }
+
+    fn hash(&self) -> u64 {
+        self.1
     }
 }
 
 impl Hash for CaseInsensitiveString<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.simplify_bytes().for_each(|b| state.write_u8(b));
+        state.write_u64(self.1);
     }
 }
 
 impl PartialEq for CaseInsensitiveString<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.simplify_bytes().eq(other.simplify_bytes())
+        self.1 == other.1
     }
 }
 
@@ -290,10 +306,7 @@ pub async fn quotes_markov_chain(
     guild_id: u64,
     user: Option<u64>,
     order: Option<usize>,
-) -> anyhow::Result<(
-    markov::Chain<CaseInsensitiveString>,
-    HashSet<CaseInsensitiveString>,
-)> {
+) -> anyhow::Result<(markov::Chain<CaseInsensitiveString<'_>>, HashSet<u64>)> {
     let db = handler.db.lock().await;
     let mut stmt = db.conn().prepare(
         "SELECT contents FROM quote WHERE guild_id = ?1 AND (?2 IS NULL or author_id = ?2)",
@@ -321,10 +334,10 @@ pub async fn quotes_markov_chain(
                         return;
                     }
                 }
-                quotes.insert(CaseInsensitiveString(Cow::Owned(msg.to_string())));
+                quotes.insert(CaseInsensitiveString::new(msg.to_string()).hash());
                 chain.feed(
                     msg.split_whitespace()
-                        .map(|s| CaseInsensitiveString(Cow::Owned(s.to_string())))
+                        .map(|s| CaseInsensitiveString::new(s.to_string()))
                         .collect::<Vec<_>>(),
                 );
             });
@@ -375,7 +388,10 @@ impl BotCommand for GetQuote {
         self.get_quote(handler, ctx, guild_id).await
     }
 
-    fn setup_options(opt_name: &'static str, opt: CreateCommandOption) -> CreateCommandOption {
+    fn setup_options(
+        opt_name: &'static str,
+        opt: CreateCommandOption<'static>,
+    ) -> CreateCommandOption<'static> {
         if opt_name == "number" {
             opt.min_int_value(1)
         } else {
@@ -397,12 +413,11 @@ async fn create_quote_embed(http: &Http, quote: &Quote) -> anyhow::Result<QuoteE
         quote.guild_id, quote.channel_id, quote.message_id
     );
     let channel = ChannelId::new(quote.channel_id)
-        .to_channel(http)
-        .await?
-        .guild();
+        .to_guild_channel(http, Some(GuildId::new(quote.guild_id)))
+        .await;
     let channel_name = channel
         .as_ref()
-        .map(|c| c.name())
+        .map(|c| c.base.name.as_str())
         .unwrap_or("unknown-channel")
         .to_owned();
     let contents = format!(
@@ -464,7 +479,7 @@ impl GetQuote {
                 CreateEmbedAuthor::new(format!("#{}{}", quote.quote_number, quote_header))
                     .icon_url(author_avatar.unwrap_or_default()),
             )
-            .description(&contents)
+            .description(contents.clone())
             .url(message_url)
             .footer(CreateEmbedFooter::new(format!("in #{channel_name}")))
             .timestamp(model::Timestamp::parse(&quote.ts.format("%+").to_string()).unwrap());
@@ -475,13 +490,24 @@ impl GetQuote {
             has_image = true;
         }
         let mut attachments = vec![];
-        for att in &quote.attachments {
+        for (i, att) in quote.attachments.into_iter().enumerate() {
             if att.ty == AttachmentType::Image && !has_image {
-                create = create.image(&att.url);
+                create = create.image(att.url.clone());
                 has_image = true;
                 continue;
             }
-            attachments.push(att.url.clone());
+            let name = if let Some(name) = att.name {
+                name
+            } else {
+                let ext = match att.ty {
+                    AttachmentType::Audio => ".mp3",
+                    AttachmentType::Video => ".mp4",
+                    AttachmentType::Image => ".png",
+                    AttachmentType::Other => "",
+                };
+                format!("attachment-{i}{ext}")
+            };
+            attachments.push((att.url.clone(), name));
         }
         Ok(CommandResponse::Public(
             serenity_command::ResponseType::WithAttachments(
@@ -555,15 +581,17 @@ impl BotCommand for FakeQuote {
         let mut resp = String::new();
         for _ in 0..100 {
             resp = if let Some(start) = &self.start {
-                chain.generate_from_token(CaseInsensitiveString(start.into()))
+                chain.generate_from_token(CaseInsensitiveString::new(start))
                 // chain.generate_str_from_token(&start)
             } else {
                 chain.generate()
             }
             .into_iter()
-            .map(|CaseInsensitiveString(s)| s)
+            .map(|CaseInsensitiveString(s, _)| s)
             .join(" ");
-            if !quotes.contains(&CaseInsensitiveString(resp.as_str().into())) {
+            if !(resp.trim().is_empty()
+                || quotes.contains(&CaseInsensitiveString::new(resp.as_str()).1))
+            {
                 break;
             }
             eprintln!("generated a real quote, trying again");
@@ -576,7 +604,10 @@ impl BotCommand for FakeQuote {
         CommandResponse::public(resp)
     }
 
-    fn setup_options(opt_name: &'static str, opt: CreateCommandOption) -> CreateCommandOption {
+    fn setup_options(
+        opt_name: &'static str,
+        opt: CreateCommandOption<'static>,
+    ) -> CreateCommandOption<'static> {
         if opt_name == "order" {
             opt.min_int_value(1)
                 .max_int_value(4)
@@ -625,16 +656,17 @@ pub async fn send_qotd(
         has_image = true;
     }
     let mut attachments = vec![];
-    for att in &qotd.attachments {
+    for (i, att) in qotd.attachments.iter().enumerate() {
         if att.ty == AttachmentType::Image && !has_image {
             embed = embed.image(&att.url);
             has_image = true;
             continue;
         }
-        attachments.push(CreateAttachment::url(http, &att.url).await?);
+        attachments.push(CreateAttachment::url(http, &att.url, format!("att{i}.png")).await?);
     }
     let channel = ChannelId::new(channel_id);
     let msg = channel
+        .widen()
         .send_message(http, CreateMessage::new().embed(embed).files(attachments))
         .await?;
     let thread_name = if qotd.contents.is_empty() {
@@ -716,7 +748,7 @@ impl Quotes {
                 .filter(|(_, quote)| !quote.is_empty())
                 .map(|(num, quote)| (num, quote.chars().take(100).collect::<String>()))
                 .fold(CreateAutocompleteResponse::new(), |resp, (num, q)| {
-                    resp.add_int_choice(q, num as i64)
+                    resp.add_choice(AutocompleteChoice::new(q, num))
                 });
             ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
                 .await?;
@@ -752,6 +784,7 @@ impl Module for Quotes {
                 ndx INTEGER,
                 type STRING,
                 url STRING,
+                name STRING,
                 UNIQUE(guild_id, quote_number, ndx)
             )",
             [],

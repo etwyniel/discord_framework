@@ -1,11 +1,11 @@
-use serenity::{all::InteractionResponseFlags, builder::CreateEmbed};
+use serenity::{all::MessageFlags, builder::CreateEmbed};
 
 #[derive(Debug)]
 pub enum ResponseType {
     Text(String),
-    Embed(Box<CreateEmbed>),
-    Mixed(String, Vec<CreateEmbed>),
-    WithAttachments(String, Vec<CreateEmbed>, Vec<String>),
+    Embed(Box<CreateEmbed<'static>>),
+    Mixed(String, Vec<CreateEmbed<'static>>),
+    WithAttachments(String, Vec<CreateEmbed<'static>>, Vec<(String, String)>),
 }
 
 impl From<String> for ResponseType {
@@ -20,20 +20,20 @@ impl<'a> From<&'a str> for ResponseType {
     }
 }
 
-impl From<CreateEmbed> for ResponseType {
-    fn from(value: CreateEmbed) -> Self {
+impl From<CreateEmbed<'static>> for ResponseType {
+    fn from(value: CreateEmbed<'static>) -> Self {
         ResponseType::Embed(Box::new(value))
     }
 }
 
-impl From<Box<CreateEmbed>> for ResponseType {
-    fn from(value: Box<CreateEmbed>) -> Self {
+impl From<Box<CreateEmbed<'static>>> for ResponseType {
+    fn from(value: Box<CreateEmbed<'static>>) -> Self {
         ResponseType::Embed(value)
     }
 }
 
-impl<T: Into<String>> From<(T, Vec<CreateEmbed>)> for ResponseType {
-    fn from((text, embeds): (T, Vec<CreateEmbed>)) -> Self {
+impl<T: Into<String>> From<(T, Vec<CreateEmbed<'static>>)> for ResponseType {
+    fn from((text, embeds): (T, Vec<CreateEmbed<'static>>)) -> Self {
         ResponseType::Mixed(text.into(), embeds)
     }
 }
@@ -50,8 +50,8 @@ impl ResponseType {
         self,
     ) -> (
         Option<String>,
-        Option<Vec<CreateEmbed>>,
-        Option<Vec<String>>,
+        Option<Vec<CreateEmbed<'static>>>,
+        Option<Vec<(String, String)>>,
     ) {
         match self {
             ResponseType::Text(s) => (Some(s), None, None),
@@ -64,9 +64,9 @@ impl ResponseType {
 
 pub struct ContentAndFlags(
     pub String,
-    pub Option<Vec<CreateEmbed>>,
-    pub Option<Vec<String>>,
-    pub InteractionResponseFlags,
+    pub Option<Vec<CreateEmbed<'static>>>,
+    pub Option<Vec<(String, String)>>,
+    pub MessageFlags,
 );
 
 impl CommandResponse {
@@ -79,7 +79,7 @@ impl CommandResponse {
                     text.unwrap_or_default(),
                     embeds,
                     attachments,
-                    InteractionResponseFlags::empty(),
+                    MessageFlags::empty(),
                 )
             }
             CommandResponse::Private(resp) => {
@@ -88,7 +88,7 @@ impl CommandResponse {
                     text.unwrap_or_default(),
                     embeds,
                     attachments,
-                    InteractionResponseFlags::EPHEMERAL,
+                    MessageFlags::EPHEMERAL,
                 )
             }
         })

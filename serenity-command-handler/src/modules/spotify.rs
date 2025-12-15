@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::HashSet,
+    str::FromStr,
     sync::{LazyLock, atomic::AtomicU64},
 };
 
@@ -19,7 +20,8 @@ use rspotify::{
 };
 use serenity::{
     all::{
-        CreateActionRow, CreateButton, CreateInteractionResponse, CreateInteractionResponseMessage,
+        CreateActionRow, CreateButton, CreateComponent, CreateInteractionResponse,
+        CreateInteractionResponseMessage,
     },
     async_trait,
     model::{
@@ -378,9 +380,10 @@ impl BotCommand for SpotifyAuthenticate {
                     CreateInteractionResponseMessage::new()
                         .ephemeral(true)
                         .content(format!("authentication URL: {url}"))
-                        .components(vec![CreateActionRow::Buttons(vec![
-                            CreateButton::new(INTERACTION_AUTH_PROMPT).label("Submit token"),
-                        ])]),
+                        .components(vec![CreateComponent::ActionRow(CreateActionRow::Buttons(
+                            vec![CreateButton::new(INTERACTION_AUTH_PROMPT).label("Submit token")]
+                                .into(),
+                        ))]),
                 ),
             )
             .await?;
@@ -439,7 +442,7 @@ pub async fn handle_message(http: &Http, message: &Message) -> anyhow::Result<()
     let mask = !(1 << offset);
     UNLINK_CACHE.fetch_and(mask, std::sync::atomic::Ordering::AcqRel);
     message
-        .react(http, ReactionType::Unicode(UNLINK_REACT.to_string()))
+        .react(http, ReactionType::from_str(UNLINK_REACT).unwrap())
         .await?;
     Ok(())
 }

@@ -16,13 +16,11 @@ use serenity::builder::{
     CreateAttachment, CreateAutocompleteResponse, CreateEmbed, CreateInteractionResponse,
     CreateInteractionResponseFollowup, EditInteractionResponse,
 };
-use serenity::json::JsonMap;
 use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::CommandType;
 use serenity::prelude::{Context, Mutex};
 use serenity_command::{BotCommand, CommandKey, CommandResponse};
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::fmt::Write;
@@ -346,7 +344,7 @@ impl GetAotys {
             CreateInteractionResponseFollowup::new()
                 .content(content)
                 .add_file(CreateAttachment::bytes(
-                    Cow::Owned(image),
+                    image,
                     format!("{}_aoty_{}.png", &self.username, &year_fmt),
                 )),
         )
@@ -540,8 +538,8 @@ impl Lastfm {
         }
         let resp = self.client.get(url).send().await?;
         if resp.status() != StatusCode::OK {
-            let map: JsonMap = resp.json().await?;
-            bail!("Error getting calling API method {method}: {:?}", map);
+            let text = resp.text().await?;
+            bail!("Error getting calling API method {method}: {}", text);
         }
         resp.json().await.map_err(anyhow::Error::from)
     }
@@ -1083,7 +1081,7 @@ fn complete_album<'a>(
         let complete = values
             .iter()
             .fold(CreateAutocompleteResponse::new(), |complete, val| {
-                complete.add_string_choice(val, val)
+                complete.add_choice(val.to_string())
             });
         ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(complete))
             .await?;

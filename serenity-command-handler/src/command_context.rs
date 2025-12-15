@@ -1,5 +1,5 @@
 use serenity::{
-    all::CreateAttachment,
+    all::{CreateAttachment, RoleId},
     async_trait,
     builder::{CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage},
     http::Http,
@@ -40,12 +40,17 @@ impl Responder for CommandInteraction {
                 .into_iter()
                 .flatten()
                 .fold(msg, |msg, embed| msg.add_embed(embed));
+            let roles = if let Some(r) = role_id {
+                vec![RoleId::new(r)]
+            } else {
+                Vec::new()
+            };
             msg = msg
                 .content(&contents)
                 .flags(flags)
-                .allowed_mentions(CreateAllowedMentions::new().roles(role_id));
-            for att in attachments.iter().flatten() {
-                msg = msg.add_file(CreateAttachment::url(http, att).await?);
+                .allowed_mentions(CreateAllowedMentions::new().roles(roles));
+            for (url, filename) in attachments.into_iter().flatten() {
+                msg = msg.add_file(CreateAttachment::url(http, url, filename).await?);
             }
             CreateInteractionResponse::Message(msg)
         })

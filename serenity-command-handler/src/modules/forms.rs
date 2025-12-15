@@ -3,13 +3,14 @@ use std::{cmp::Ordering, sync::Arc};
 use anyhow::{Context as _, anyhow, bail};
 use chrono::Duration;
 use fallible_iterator::FallibleIterator;
+use futures::FutureExt;
 use itertools::Itertools;
 use regex::Regex;
 use rspotify::prelude::Id;
 use rusqlite::{Connection, params};
 use serde_derive::{Deserialize, Serialize};
 use serenity::{
-    FutureExt, async_trait,
+    async_trait,
     builder::{CreateCommand, CreateCommandOption, CreateEmbed},
     futures::future::BoxFuture,
     model::{
@@ -291,7 +292,7 @@ pub fn sanitize_name(s: &str) -> String {
 }
 
 impl SimpleForm {
-    pub fn to_command(&self, command_name: &str) -> CreateCommand {
+    pub fn to_command(&self, command_name: &str) -> CreateCommand<'_> {
         let mut cmd = CreateCommand::new(sanitize_name(command_name)).description(&self.title);
         // skip first question, assumed to be username
         let mut questions = self.questions.iter().skip(1).collect::<Vec<_>>();
@@ -315,7 +316,7 @@ impl SimpleForm {
                     continue;
                 }
             }
-            let mut opt = CreateCommandOption::new(CommandOptionType::String, &sanitized, &q.title)
+            let mut opt = CreateCommandOption::new(CommandOptionType::String, sanitized, &q.title)
                 .required(q.required)
                 .set_autocomplete(autocomplete);
             if let QuestionType::Choice(values) = &q.ty {
@@ -389,7 +390,10 @@ impl BotCommand for CommandFromForm {
         self.add_form(handler, ctx, guild_id).await
     }
 
-    fn setup_options(opt_name: &'static str, opt: CreateCommandOption) -> CreateCommandOption {
+    fn setup_options(
+        opt_name: &'static str,
+        opt: CreateCommandOption<'static>,
+    ) -> CreateCommandOption<'static> {
         if opt_name == "submission_type" {
             opt.add_string_choice("song", "song")
                 .add_string_choice("album", "album")
@@ -431,7 +435,7 @@ impl CommandFromForm {
                  WHERE guild_id = ?1 AND command_name = ?2",
             params![
                 guild_id.get(),
-                &cmd.name,
+                cmd.name.to_string(),
                 cmd.id.get(),
                 form_json,
                 &submission_type
@@ -441,7 +445,7 @@ impl CommandFromForm {
 
         let command = FormCommand {
             guild_id: guild_id.get(),
-            command_name: cmd.name.clone(),
+            command_name: cmd.name.to_string(),
             command_id: cmd.id.get(),
             form,
             submission_type,
@@ -730,7 +734,7 @@ impl SimpleForm {
                 .iter()
                 .find(|opt| opt.name == sanitized)
                 .and_then(|opt| match &opt.value {
-                    CommandDataOptionValue::String(s) => Some(s.clone()),
+                    CommandDataOptionValue::String(s) => Some(s.to_string()),
                     _ => None,
                 })
                 .or_else(|| next_value.take());
@@ -751,8 +755,8 @@ impl SimpleForm {
                     if let Some(p) = lookup.providers().iter().find(|p| p.url_matches(&value)) {
                         let album = p.get_from_url(&value).await?;
                         let album_info = album.format_name();
-                        next_value = Some(album_info.clone());
-                        value = album.url.clone().unwrap_or_default();
+                        next_value = Some(album_info.to_string());
+                        value = album.url.as_deref().unwrap_or_default().to_string();
                         song_infos.push(album_info)
                     }
                 } else {

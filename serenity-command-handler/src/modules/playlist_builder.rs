@@ -12,8 +12,8 @@ use serenity::{
     all::GuildId,
     async_trait,
     builder::{CreateInteractionResponse, EditInteractionResponse},
-    client::Context,
     model::{Permissions, application::CommandInteraction},
+    prelude::Context,
 };
 use tokio::task::JoinSet;
 
