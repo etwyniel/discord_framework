@@ -1,5 +1,9 @@
+use anyhow::anyhow;
 use serenity::{
-    all::{CreateAttachment, RoleId},
+    all::{
+        Component, CreateAttachment, GenericChannelId, GuildId, Label, LabelComponent, Member,
+        ModalInteraction, RoleId, User,
+    },
     async_trait,
     builder::{CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage},
     http::Http,
@@ -12,6 +16,119 @@ use serenity::{
 use serenity_command::{CommandResponse, ContentAndFlags};
 
 #[async_trait]
+pub trait InteractionExt {
+    fn channel_id(&self) -> GenericChannelId;
+    fn guild_id(&self) -> anyhow::Result<GuildId>;
+
+    fn user(&self) -> &User;
+
+    fn member(&self) -> Option<&Member>;
+
+    async fn create_response(
+        &self,
+        http: &Http,
+        builder: CreateInteractionResponse<'_>,
+    ) -> serenity::Result<()>;
+
+    async fn get_response(&self, http: &Http) -> serenity::Result<Message>;
+}
+
+#[async_trait]
+impl InteractionExt for &CommandInteraction {
+    fn channel_id(&self) -> GenericChannelId {
+        self.channel_id
+    }
+
+    fn guild_id(&self) -> anyhow::Result<GuildId> {
+        self.guild_id
+            .ok_or_else(|| anyhow!("Must be run in a server"))
+    }
+
+    fn user(&self) -> &User {
+        &self.user
+    }
+
+    fn member(&self) -> Option<&Member> {
+        self.member.as_deref()
+    }
+
+    async fn create_response(
+        &self,
+        http: &Http,
+        builder: CreateInteractionResponse<'_>,
+    ) -> serenity::Result<()> {
+        CommandInteraction::create_response(self, http, builder).await
+    }
+
+    async fn get_response(&self, http: &Http) -> serenity::Result<Message> {
+        CommandInteraction::get_response(self, http).await
+    }
+}
+
+#[async_trait]
+impl InteractionExt for ModalInteraction {
+    fn channel_id(&self) -> GenericChannelId {
+        self.channel_id
+    }
+
+    fn guild_id(&self) -> anyhow::Result<GuildId> {
+        self.guild_id
+            .ok_or_else(|| anyhow!("Must be run in a server"))
+    }
+
+    fn user(&self) -> &User {
+        &self.user
+    }
+
+    fn member(&self) -> Option<&Member> {
+        self.member.as_ref()
+    }
+
+    async fn create_response(
+        &self,
+        http: &Http,
+        builder: CreateInteractionResponse<'_>,
+    ) -> serenity::Result<()> {
+        ModalInteraction::create_response(self, http, builder).await
+    }
+
+    async fn get_response(&self, http: &Http) -> serenity::Result<Message> {
+        ModalInteraction::get_response(self, http).await
+    }
+}
+
+#[async_trait]
+impl<T: InteractionExt + Sync> InteractionExt for &T {
+    fn channel_id(&self) -> GenericChannelId {
+        (*self).channel_id()
+    }
+
+    fn guild_id(&self) -> anyhow::Result<GuildId> {
+        (*self).guild_id()
+    }
+
+    fn user(&self) -> &User {
+        (*self).user()
+    }
+
+    fn member(&self) -> Option<&Member> {
+        (*self).member()
+    }
+
+    async fn create_response(
+        &self,
+        http: &Http,
+        builder: CreateInteractionResponse<'_>,
+    ) -> serenity::Result<()> {
+        (*self).create_response(http, builder).await
+    }
+
+    async fn get_response(&self, http: &Http) -> serenity::Result<Message> {
+        (*self).get_response(http).await
+    }
+}
+
+#[async_trait]
 pub trait Responder {
     async fn respond(
         &self,
@@ -22,7 +139,7 @@ pub trait Responder {
 }
 
 #[async_trait]
-impl Responder for CommandInteraction {
+impl<T: InteractionExt + Sync> Responder for T {
     async fn respond(
         &self,
         http: &Http,
@@ -79,4 +196,41 @@ pub fn get_focused_option(options: &[CommandDataOption]) -> Option<&str> {
         .iter()
         .find(|opt| matches!(&opt.value, CommandDataOptionValue::Autocomplete { .. }))
         .map(|opt| opt.name.as_str())
+}
+
+pub fn get_text_input_value<'a>(components: &'a [Component], id: &'_ str) -> Option<&'a str> {
+    components.iter().find_map(|row| {
+        let Component::Label(Label {
+            component: LabelComponent::InputText(t),
+            ..
+        }) = row
+        else {
+            return None;
+        };
+        if t.custom_id == id {
+            t.value.as_deref()
+        } else {
+            None
+        }
+    })
+}
+
+pub fn get_select_values<'a>(components: &'a [Component], id: &'_ str) -> &'a [String] {
+    components
+        .iter()
+        .find_map(|row| {
+            let Component::Label(Label {
+                component: LabelComponent::SelectMenu(m),
+                ..
+            }) = row
+            else {
+                return None;
+            };
+            if m.custom_id == id {
+                Some(m.values.as_slice())
+            } else {
+                None
+            }
+        })
+        .unwrap_or(&[])
 }

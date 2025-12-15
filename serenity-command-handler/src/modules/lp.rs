@@ -40,7 +40,7 @@ use serenity::prelude::Context;
 use serenity_command_derive::Command;
 
 use crate::album::Album;
-use crate::command_context::{Responder, get_focused_option, get_str_opt_ac};
+use crate::command_context::{InteractionExt, Responder, get_focused_option, get_str_opt_ac};
 use crate::modules::{Bandcamp, Lastfm, Spotify};
 use crate::prelude::*;
 use serenity_command::CommandResponse;
@@ -70,18 +70,18 @@ pub struct Lp {
         desc = "What you will be listening to (e.g. band - album, spotify/bandcamp link)",
         autocomplete
     )]
-    album: String,
+    pub album: String,
     #[cmd(
         desc = "(Optional) Link to the album/playlist (Spotify, Youtube, Bandcamp...)",
         autocomplete
     )]
-    link: Option<String>,
+    pub link: Option<String>,
     #[cmd(desc = "Time at which the LP will take place (e.g. XX:20, +5)")]
-    time: Option<String>,
+    pub time: Option<String>,
     #[cmd(desc = "Where to look for album info (defaults to spotify)")]
-    provider: Option<String>,
+    pub provider: Option<String>,
     #[cmd(desc = "Use a specific role instead of the default (admin-only)")]
-    role: Option<RoleId>,
+    pub role: Option<RoleId>,
 }
 
 fn format_end(start: DateTime<Utc>, duration: Option<Duration>) -> String {
@@ -266,7 +266,7 @@ impl Lp {
     async fn build_contents(
         self,
         handler: &Handler,
-        command: &CommandInteraction,
+        command: impl InteractionExt,
         resolved_start: Option<DateTime<Utc>>,
     ) -> anyhow::Result<(String, Option<u64>, Album)> {
         let Lp {
@@ -278,8 +278,7 @@ impl Lp {
         } = &self;
         let album = album.trim();
         let link = link.as_deref().map(str::trim);
-        let (lp_name, mut info) =
-            find_album(handler, album, link.as_deref(), provider.as_deref()).await?;
+        let (lp_name, mut info) = find_album(handler, album, link, provider.as_deref()).await?;
         let lp_name = lp_name.map(|s| s.to_string());
         // get genres if needed
         if let Some(genres) = get_lastfm_genres(handler, &info).await {
@@ -296,25 +295,28 @@ impl Lp {
                 .await?;
         Ok((resp_content, role_id, info))
     }
-}
 
-#[async_trait]
-impl BotCommand for Lp {
-    type Data = Handler;
-    async fn run(
+    pub async fn run_lp(
         self,
         handler: &Handler,
         ctx: &Context,
-        command: &CommandInteraction,
+        command: impl InteractionExt + Responder + Copy,
     ) -> anyhow::Result<CommandResponse> {
-        if let (Some(_), Some(member)) = (self.role, &command.member)
-            && !member.permissions.unwrap_or_default().mention_everyone()
-        {
-            bail!("Only admins are allowed to specify a role to ping.");
+        let guild_id = command.guild_id()?.get();
+        if let Some(role_id) = self.role {
+            let role = ctx
+                .http
+                .get_guild_role(GuildId::new(guild_id), role_id)
+                .await?;
+            if !role.mentionable()
+                && let Some(member) = command.member()
+                && !member.permissions.unwrap_or_default().mention_everyone()
+            {
+                bail!("Only admins are allowed to ping <@&{role_id}>.");
+            }
         }
         let http = &ctx.http;
         let (resp_content, role_id, info) = self.build_contents(handler, command, None).await?;
-        let guild_id = command.guild_id()?.get();
         let webhook: Option<String> = handler.get_guild_field(guild_id, "webhook").await?;
         let wh = match webhook.as_deref().map(|url| http.get_webhook_from_url(url)) {
             Some(fut) => Some(fut.await?),
@@ -328,7 +330,7 @@ impl BotCommand for Lp {
         let message = if let Some(wh) = &wh {
             // Send LP message through webhook
             // This lets us impersonate the user who sent the command
-            let user = &command.user;
+            let user = command.user();
             let avatar_url = GuildId::new(guild_id)
                 .member(http, user.id)
                 .await?
@@ -353,7 +355,7 @@ impl BotCommand for Lp {
             .unwrap() // Message is present because we set wait to true in execute
         } else {
             // prefix response with pinger mention
-            let resp = format!("<@{}>: {resp_content}", command.user.id.get());
+            let resp = format!("<@{}>: {resp_content}", command.user().id.get());
             // Create interaction response
             let mut create_msg = CreateInteractionResponseMessage::new()
                 .content(resp)
@@ -371,7 +373,7 @@ impl BotCommand for Lp {
         };
         let mut response = format!(
             "LP created: {}",
-            message.id.link(message.channel_id, command.guild_id)
+            message.id.link(message.channel_id, command.guild_id().ok())
         );
         if handler.get_guild_field(guild_id, "create_threads").await? {
             // Create a thread from the response message for the LP to take place in
@@ -403,7 +405,7 @@ impl BotCommand for Lp {
         }
         if let Some(wh) = wh {
             // If we used a webhook, we still need to create the interaction response
-            let response = if wh.channel_id.map(|id| id.get()) == Some(command.channel_id.get()) {
+            let response = if wh.channel_id.map(|id| id.get()) == Some(command.channel_id().get()) {
                 CommandResponse::Private(response.into())
             } else {
                 CommandResponse::Public(response.into())
@@ -411,6 +413,19 @@ impl BotCommand for Lp {
             command.respond(&ctx.http, response, None).await?;
         }
         Ok(CommandResponse::None)
+    }
+}
+
+#[async_trait]
+impl BotCommand for Lp {
+    type Data = Handler;
+    async fn run(
+        self,
+        handler: &Handler,
+        ctx: &Context,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        self.run_lp(handler, ctx, command).await
     }
 
     fn setup_options(

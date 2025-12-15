@@ -169,7 +169,7 @@ impl Handler {
             let name = ac.data.name.clone();
             let key = (name.as_str(), ac.data.kind);
             for h in &self.completion_handlers {
-                match h(self, &ctx, key, &ac).await {
+                match h(self, ctx, key, ac).await {
                     Err(e) => {
                         eprintln!("Autocomplete interaction failed for command {name}: {e:?}");
                         return;
@@ -198,7 +198,7 @@ impl Handler {
             eprintln!("{guild_name}{user}: /{name} {params}");
 
             let start = Instant::now();
-            let resp = self.process_command(&ctx, &command).await;
+            let resp = self.process_command(ctx, command).await;
             let elapsed = start.elapsed();
             eprintln!(
                 "{guild_name}{user}: /{name} -({:.1?})-> {:?}",
