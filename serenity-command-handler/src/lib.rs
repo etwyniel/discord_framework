@@ -237,8 +237,8 @@ impl HandlerBuilder {
         let mut m = M::init(&self.modules).await?;
         m.setup(&mut self.db).await?;
         m.register_commands(&mut self.commands, &mut self.completion_handlers);
-        m.register_event_handlers(&mut self.event_handlers);
-        let module = m.into();
+        let module: Arc<M> = m.into();
+        Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
         self.modules.add(Arc::clone(&module));
         self.module_list.push(module.as_trait());
         Ok(self)
@@ -251,8 +251,8 @@ impl HandlerBuilder {
         self = M::add_dependencies(self).await?;
         m.setup(&mut self.db).await?;
         m.register_commands(&mut self.commands, &mut self.completion_handlers);
-        m.register_event_handlers(&mut self.event_handlers);
-        let module = Arc::new(m);
+        let module: Arc<M> = m.into();
+        Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
         self.modules.add(Arc::clone(&module));
         self.module_list.push(module.as_trait());
         Ok(self)
@@ -303,11 +303,13 @@ pub trait Module: 'static + Send + Sync {
     ) {
     }
 
-    fn register_event_handlers(&self, _handlers: &mut events::EventHandlers) {}
+    fn register_event_handlers(self: Arc<Self>, _handlers: &mut events::EventHandlers) {}
 
     fn autocompletes(&self) -> &'static [&'static str] {
         &[]
     }
+
+    fn start(&self, _ctx: &Context, _data_about_bot: &serenity::model::gateway::Ready) {}
 }
 
 #[allow(async_fn_in_trait)]
