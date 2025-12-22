@@ -5,6 +5,7 @@ use anyhow::{anyhow, bail};
 use bot_management::ModManagement;
 use rusqlite::Connection;
 pub use serenity; // re-export
+use serenity::all::RoleId;
 use serenity::model::prelude::{GuildId, UserId};
 use serenity::{
     async_trait,
@@ -30,6 +31,9 @@ pub mod modules;
 use db::Db;
 
 use command_context::Responder;
+
+use crate::command_context::{get_select_values, get_text_input_value};
+use crate::modules::lp::Lp;
 
 pub type CommandStore = serenity_command::CommandStore<'static, Handler>;
 
@@ -210,6 +214,33 @@ impl Handler {
             };
 
             if let Err(why) = command.respond(&ctx.http, resp, None).await {
+                eprintln!("cannot respond to slash command: {why:?}");
+            }
+        } else if let Interaction::Modal(modal) = interaction {
+            let components = &modal.data.components;
+            let album = get_text_input_value(components, "album")
+                .unwrap()
+                .to_owned();
+            let link = get_text_input_value(components, "link").map(str::to_owned);
+            let desc = get_text_input_value(components, "description");
+            let time = get_text_input_value(components, "time").map(str::to_owned);
+            let role = get_select_values(components, "role")
+                .first()
+                .map(|s| RoleId::new(s.parse::<u64>().unwrap()));
+            let lp = Lp {
+                album,
+                link,
+                time,
+                provider: None,
+                role,
+            };
+            let resp = lp.run_lp(self, ctx, modal, desc).await;
+            let resp = match resp {
+                Ok(resp) => resp,
+                Err(e) => CommandResponse::Private(e.to_string().into()),
+            };
+
+            if let Err(why) = modal.respond(&ctx.http, resp, None).await {
                 eprintln!("cannot respond to slash command: {why:?}");
             }
         }

@@ -15,11 +15,14 @@ use regex::Regex;
 use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
-use serenity::all::Message;
-use serenity::all::{AutoArchiveDuration, AutocompleteChoice};
+use serenity::all::{CreateInteractionResponseMessage, GenericChannelId, MessageId, UserId};
+use serenity::all::{
+    AutoArchiveDuration, AutocompleteChoice, CreateInputText, CreateModal, CreateModalComponent,
+    InputTextStyle,
+};
 use serenity::all::{Channel, RoleId};
-use serenity::all::{CreateAttachment, GenericChannelId, MessageId};
-use serenity::all::{CreateInteractionResponseMessage, UserId};
+use serenity::all::{CreateAttachment, CreateSelectMenu, CreateSelectMenuKind};
+use serenity::all::{CreateLabel, Message};
 use serenity::async_trait;
 use serenity::builder::CreateAllowedMentions;
 use serenity::builder::CreateAutocompleteResponse;
@@ -166,6 +169,7 @@ async fn build_message_contents(
     info: &Album,
     role_id: Option<u64>,
     resolved_start: Option<DateTime<Utc>>,
+    desc: Option<&str>,
 ) -> anyhow::Result<String> {
     let (when, resolved_start) =
         convert_lp_time(lp.time.as_deref(), info.duration, resolved_start)?;
@@ -205,6 +209,10 @@ async fn build_message_contents(
             resp_content.push_str(" | ");
         }
         _ = write!(&mut resp_content, "{}", &genres);
+    }
+    if let Some(desc) = desc {
+        resp_content.push_str("\n\n");
+        resp_content.push_str(desc);
     }
     if !info.has_rich_embed {
         let track_info = info.format_tracks(Some(10));
@@ -268,6 +276,7 @@ impl Lp {
         handler: &Handler,
         command: impl InteractionExt,
         resolved_start: Option<DateTime<Utc>>,
+        desc: Option<&str>,
     ) -> anyhow::Result<(String, Option<u64>, Album)> {
         let Lp {
             album,
@@ -290,9 +299,15 @@ impl Lp {
             .await
             .context("error retrieving LP role")?;
         role_id = role.map(|r| r.get()).or(role_id);
-        let resp_content =
-            build_message_contents(self, lp_name.as_deref(), &info, role_id, resolved_start)
-                .await?;
+        let resp_content = build_message_contents(
+            self,
+            lp_name.as_deref(),
+            &info,
+            role_id,
+            resolved_start,
+            desc,
+        )
+        .await?;
         Ok((resp_content, role_id, info))
     }
 
@@ -301,6 +316,7 @@ impl Lp {
         handler: &Handler,
         ctx: &Context,
         command: impl InteractionExt + Responder + Copy,
+        desc: Option<&str>,
     ) -> anyhow::Result<CommandResponse> {
         let guild_id = command.guild_id()?.get();
         if let Some(role_id) = self.role {
@@ -316,7 +332,8 @@ impl Lp {
             }
         }
         let http = &ctx.http;
-        let (resp_content, role_id, info) = self.build_contents(handler, command, None).await?;
+        let (resp_content, role_id, info) =
+            self.build_contents(handler, command, None, desc).await?;
         let webhook: Option<String> = handler.get_guild_field(guild_id, "webhook").await?;
         let wh = match webhook.as_deref().map(|url| http.get_webhook_from_url(url)) {
             Some(fut) => Some(fut.await?),
@@ -388,6 +405,7 @@ impl Lp {
             if thread_name.len() > 100 {
                 thread_name = &thread_name[..100];
             }
+            // let mut guild_chan = chan.guild().map(|c| (c.kind, c));
             if let (None, Channel::GuildThread(thread)) = (&webhook, &mut chan) {
                 // If we're already in a thread, just rename it
                 // unless we are using a webhook, in which case we can create a new thread
@@ -431,7 +449,7 @@ impl BotCommand for Lp {
         ctx: &Context,
         command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        self.run_lp(handler, ctx, command).await
+        self.run_lp(handler, ctx, command, None).await
     }
 
     fn setup_options(
@@ -586,7 +604,7 @@ impl EditLp {
         }
         let (contents, role_id, info) = lp
             .params
-            .build_contents(handler, command, lp.resolved_start)
+            .build_contents(handler, command, lp.resolved_start, None)
             .await?;
         // prefix response with pinger mention
         let contents = format!("<@{}>: {contents}", command.user.id.get());
@@ -688,6 +706,76 @@ impl BotCommand for EditLp {
     }
 }
 
+#[derive(Command, Debug)]
+#[cmd(name = "create_lp", desc = "Create a Listening Party")]
+pub struct CreateLp;
+
+#[async_trait]
+impl BotCommand for CreateLp {
+    type Data = Handler;
+    async fn run(
+        self,
+        handler: &Handler,
+        ctx: &Context,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let album_field = CreateLabel::input_text(
+            "Album",
+            CreateInputText::new(InputTextStyle::Short, "album").required(true),
+        )
+        .description("Album link, listening party title, or album search query");
+        let link_field = CreateLabel::input_text(
+            "Link",
+            CreateInputText::new(InputTextStyle::Short, "link").required(false),
+        )
+        .description("Optional");
+        let time_field = CreateLabel::input_text(
+            "Time",
+            CreateInputText::new(InputTextStyle::Short, "time")
+                .required(false)
+                .placeholder("+5"),
+        )
+        .description("Listening Party time (e.g. +5, XX:20)");
+        let description_field = CreateLabel::input_text(
+            "Description",
+            CreateInputText::new(InputTextStyle::Paragraph, "description").required(false),
+        );
+        let mut fields = vec![
+            CreateModalComponent::Label(album_field),
+            CreateModalComponent::Label(link_field),
+            CreateModalComponent::Label(description_field),
+            CreateModalComponent::Label(time_field),
+        ];
+        if let Some(member) = &command.member
+            && member
+                .permissions
+                .unwrap_or_default()
+                .contains(Permissions::MENTION_EVERYONE)
+        {
+            let default_roles = handler
+                .get_guild_field(command.guild_id()?.get(), "role_id")
+                .await
+                .map(|r| Cow::Owned(vec![RoleId::new(r)]))
+                .ok();
+            let role_field = CreateLabel::select_menu(
+                "Role",
+                CreateSelectMenu::new("role", CreateSelectMenuKind::Role { default_roles })
+                    .max_values(1),
+            );
+            fields.push(CreateModalComponent::Label(role_field));
+        }
+        command
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Modal(
+                    CreateModal::new("create_lp", "Start a Listening Party").components(fields),
+                ),
+            )
+            .await?;
+        Ok(CommandResponse::None)
+    }
+}
+
 #[derive(Default)]
 pub struct ModLp {
     lp_messages: RwLock<HashMap<GenericChannelId, (MessageId, UserId)>>,
@@ -774,6 +862,7 @@ impl Module for ModLp {
         store.register::<SetCreateThreads>();
         store.register::<SetWebhook>();
         store.register::<EditLp>();
+        store.register::<CreateLp>();
         completions.push(ModLp::complete_lp);
     }
 }
