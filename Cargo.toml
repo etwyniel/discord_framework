@@ -17,4 +17,5 @@ features = [
     "rustls_backend",
     "model",
     "cache",
+    "unstable",
 ]

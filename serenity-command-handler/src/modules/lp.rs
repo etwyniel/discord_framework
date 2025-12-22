@@ -1,11 +1,11 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::ops::Add;
 
 use crate::RegisterableModule;
 use crate::{CommandStore, HandlerBuilder, Module, db::Db};
 use anyhow::Context as _;
-use anyhow::anyhow;
 use anyhow::bail;
 use chrono::{Duration, prelude::*};
 use futures::FutureExt;
@@ -15,11 +15,11 @@ use regex::Regex;
 use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
-use serenity::all::CreateAttachment;
-use serenity::all::CreateInteractionResponseMessage;
 use serenity::all::Message;
 use serenity::all::{AutoArchiveDuration, AutocompleteChoice};
 use serenity::all::{Channel, RoleId};
+use serenity::all::{CreateAttachment, GenericChannelId, MessageId};
+use serenity::all::{CreateInteractionResponseMessage, UserId};
 use serenity::async_trait;
 use serenity::builder::CreateAllowedMentions;
 use serenity::builder::CreateAutocompleteResponse;
@@ -29,7 +29,6 @@ use serenity::builder::CreateThread;
 use serenity::builder::EditMessage;
 use serenity::builder::EditThread;
 use serenity::builder::ExecuteWebhook;
-use serenity::builder::GetMessages;
 use serenity::model::Permissions;
 use serenity::model::application::CommandDataOption;
 use serenity::model::application::CommandType;
@@ -38,6 +37,7 @@ use serenity::model::id::GuildId;
 use serenity::model::prelude::CommandInteraction;
 use serenity::prelude::Context;
 use serenity_command_derive::Command;
+use tokio::sync::RwLock;
 
 use crate::album::Album;
 use crate::command_context::{InteractionExt, Responder, get_focused_option, get_str_opt_ac};
@@ -371,6 +371,12 @@ impl Lp {
                 .await?;
             command.get_response(&ctx.http).await?
         };
+        let mod_lp: &ModLp = handler.module().unwrap();
+        mod_lp
+            .lp_messages
+            .write()
+            .await
+            .insert(command.channel_id(), (message.id, command.user().id));
         let mut response = format!(
             "LP created: {}",
             message.id.link(message.channel_id, command.guild_id().ok())
@@ -614,26 +620,27 @@ impl BotCommand for EditLp {
         ctx: &Context,
         command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let messages = command
-            .channel_id
-            .messages(&ctx.http, GetMessages::new().limit(100))
+        let author_id = command.user.id;
+        let mod_lp: &ModLp = handler.module().unwrap();
+        let Some((message_id, user_id)) = mod_lp
+            .lp_messages
+            .read()
             .await
-            .context("couldn't retrieve messages")?;
-        let self_id = *handler.self_id.get().unwrap();
-        let author_id = command.user.id.get();
-        let author_id_str = author_id.to_string();
-        let mut msg = messages
-            .into_iter()
-            .filter(|msg| msg.author.id == self_id)
-            .find(|msg| {
-                #[allow(deprecated)] // no other way to get the command name currently
-                if let Some(interaction) = &msg.interaction {
-                    interaction.user.id == author_id && interaction.name == "lp"
-                } else {
-                    msg.content.contains(&author_id_str)
-                }
-            })
-            .ok_or_else(|| anyhow!("No recent listening party to edit."))?;
+            .get(&command.channel_id)
+            .copied()
+        else {
+            bail!("No recent listening party to edit.")
+        };
+        let mut msg = ctx.http.get_message(command.channel_id, message_id).await?;
+        if user_id != author_id
+            && let Some(member) = &command.member
+            && !member
+                .permissions
+                .map(|p| p.manage_events())
+                .unwrap_or_default()
+        {
+            bail!("Cannot edit listening party");
+        }
         if self.cancel == Some(true) {
             msg.edit(
                 &ctx.http,
@@ -681,7 +688,10 @@ impl BotCommand for EditLp {
     }
 }
 
-pub struct ModLp;
+#[derive(Default)]
+pub struct ModLp {
+    lp_messages: RwLock<HashMap<GenericChannelId, (MessageId, UserId)>>,
+}
 
 impl ModLp {
     async fn autocomplete_lp(
@@ -784,6 +794,6 @@ impl RegisterableModule for ModLp {
     }
 
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(ModLp)
+        Ok(ModLp::default())
     }
 }
