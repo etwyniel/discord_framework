@@ -217,7 +217,7 @@ impl Handler {
                 eprintln!("cannot respond to slash command: {why:?}");
             }
         } else if let Interaction::Modal(modal) = interaction {
-            let components = &modal.data.components;
+            let components = modal.data.components.as_slice();
             let album = get_text_input_value(components, "album")
                 .unwrap()
                 .to_owned();

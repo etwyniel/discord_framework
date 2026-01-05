@@ -15,13 +15,13 @@ use regex::Regex;
 use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
-use serenity::all::{CreateInteractionResponseMessage, GenericChannelId, MessageId, UserId};
 use serenity::all::{
     AutoArchiveDuration, AutocompleteChoice, CreateInputText, CreateModal, CreateModalComponent,
     InputTextStyle,
 };
 use serenity::all::{Channel, RoleId};
 use serenity::all::{CreateAttachment, CreateSelectMenu, CreateSelectMenuKind};
+use serenity::all::{CreateInteractionResponseMessage, GenericChannelId, MessageId, UserId};
 use serenity::all::{CreateLabel, Message};
 use serenity::async_trait;
 use serenity::builder::CreateAllowedMentions;
@@ -117,7 +117,7 @@ fn convert_lp_time(
     let xx_re = Regex::new("(?i)^(XX:?)?([0-5][0-9])$")?; // e.g. XX:15, xx15 or 15
     let plus_re = Regex::new(r"\+?(([0-5])?[0-9])m?")?; // e.g. +25
     if let Some(cap) = xx_re.captures(time) {
-        let min: i64 = cap.get(2).unwrap().as_str().parse()?;
+        let min: i64 = cap.get(2).unwrap().as_str().parse().expect("regex match should be a valid integer");
         if !(0..60).contains(&min) {
             bail!("Invalid time");
         }
@@ -129,7 +129,7 @@ fn convert_lp_time(
         };
         lp_time = lp_time.add(Duration::minutes(to_add));
     } else if let Some(cap) = plus_re.captures(time) {
-        let extra_mins: i64 = cap.get(1).unwrap().as_str().parse()?;
+        let extra_mins: i64 = cap.get(1).unwrap().as_str().parse().expect("regex match should be a valid integer");
         lp_time = lp_time.add(Duration::minutes(extra_mins));
     } else {
         return Ok((time.to_string(), None));
@@ -212,7 +212,9 @@ async fn build_message_contents(
     }
     if let Some(desc) = desc {
         resp_content.push_str("\n\n");
+        resp_content.push(SEPARATOR);
         resp_content.push_str(desc);
+        resp_content.push(SEPARATOR);
     }
     if !info.has_rich_embed {
         let track_info = info.format_tracks(Some(10));
@@ -576,6 +578,7 @@ impl EditLp {
         ctx: &Context,
         msg: &mut Message,
         command: &CommandInteraction,
+        desc: Option<&str>,
     ) -> anyhow::Result<CommandResponse> {
         let Some(pos) = msg.content.find(LP_URI) else {
             bail!("no embedded data");
@@ -604,7 +607,7 @@ impl EditLp {
         }
         let (contents, role_id, info) = lp
             .params
-            .build_contents(handler, command, lp.resolved_start, None)
+            .build_contents(handler, command, lp.resolved_start, desc)
             .await?;
         // prefix response with pinger mention
         let contents = format!("<@{}>: {contents}", command.user.id.get());
@@ -667,8 +670,9 @@ impl BotCommand for EditLp {
             .await?;
             return CommandResponse::public("Canceled listening party");
         }
+        let desc = msg.content.split(SEPARATOR).nth(3).map(str::to_string);
         match self
-            .edit_from_embedded_data(handler, ctx, &mut msg, command)
+            .edit_from_embedded_data(handler, ctx, &mut msg, command, desc.as_deref())
             .await
         {
             Ok(resp) => return Ok(resp),
@@ -707,7 +711,7 @@ impl BotCommand for EditLp {
 }
 
 #[derive(Command, Debug)]
-#[cmd(name = "create_lp", desc = "Create a Listening Party")]
+#[cmd(name = "create_listening_party", desc = "Create a Listening Party")]
 pub struct CreateLp;
 
 #[async_trait]
@@ -740,6 +744,123 @@ impl BotCommand for CreateLp {
             "Description",
             CreateInputText::new(InputTextStyle::Paragraph, "description").required(false),
         );
+        let mut fields = vec![
+            CreateModalComponent::Label(album_field),
+            CreateModalComponent::Label(link_field),
+            CreateModalComponent::Label(description_field),
+            CreateModalComponent::Label(time_field),
+        ];
+        if let Some(member) = &command.member
+            && member
+                .permissions
+                .unwrap_or_default()
+                .contains(Permissions::MENTION_EVERYONE)
+        {
+            let default_roles = handler
+                .get_guild_field(command.guild_id()?.get(), "role_id")
+                .await
+                .map(|r| Cow::Owned(vec![RoleId::new(r)]))
+                .ok();
+            let role_field = CreateLabel::select_menu(
+                "Role",
+                CreateSelectMenu::new("role", CreateSelectMenuKind::Role { default_roles })
+                    .max_values(1),
+            );
+            fields.push(CreateModalComponent::Label(role_field));
+        }
+        command
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Modal(
+                    CreateModal::new("create_lp", "Start a Listening Party").components(fields),
+                ),
+            )
+            .await?;
+        Ok(CommandResponse::None)
+    }
+}
+
+#[derive(Command, Debug)]
+#[cmd(name = "edit_listening_party", desc = "Edit a Listening Party")]
+pub struct EditListeningParty;
+
+#[async_trait]
+impl BotCommand for EditListeningParty {
+    type Data = Handler;
+    async fn run(
+        self,
+        handler: &Handler,
+        ctx: &Context,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let author_id = command.user.id;
+        let mod_lp: &ModLp = handler.module().unwrap();
+        let Some((message_id, user_id)) = mod_lp
+            .lp_messages
+            .read()
+            .await
+            .get(&command.channel_id)
+            .copied()
+        else {
+            bail!("No recent listening party to edit.")
+        };
+        let msg = ctx.http.get_message(command.channel_id, message_id).await?;
+        if user_id != author_id
+            && let Some(member) = &command.member
+            && !member
+                .permissions
+                .map(|p| p.manage_events())
+                .unwrap_or_default()
+        {
+            bail!("Cannot edit listening party");
+        }
+        let Some(pos) = msg.content.find(LP_URI) else {
+            bail!("no embedded data");
+        };
+        let url: Url = msg.content[pos..]
+            .trim_end_matches(')')
+            .parse()
+            .context("invalid embedded URL")?;
+        let lp: ResolvedLp = serde_urlencoded::de::from_str(url.query().unwrap_or_default())
+            .context("failed to deserialize embedded data")?;
+
+        let lp_id = msg.id;
+        let album_input_id = format!("album.{lp_id}");
+        let mut album_input =
+            CreateInputText::new(InputTextStyle::Short, album_input_id).required(true);
+        if let Some(title) = &lp.resolved_title {
+            album_input = album_input.value(title);
+        }
+        let album_field = CreateLabel::input_text("Album", album_input)
+            .description("Album link, listening party title, or album search query");
+
+        let link_input_id = format!("link.{lp_id}");
+        let mut link_input =
+            CreateInputText::new(InputTextStyle::Short, link_input_id).required(false);
+        if let Some(link) = &lp.resolved_link {
+            link_input = link_input.value(link);
+        }
+        let link_field = CreateLabel::input_text("Link", link_input).description("Optional");
+
+        let time_input_id = format!("time.{lp_id}");
+        let mut time_input = CreateInputText::new(InputTextStyle::Short, time_input_id)
+            .required(false)
+            .placeholder("+5");
+        if let Some(time) = &lp.resolved_start {
+            let minute = time.minute();
+            time_input = time_input.value(format!("XX:{minute:02}"));
+        }
+        let time_field = CreateLabel::input_text("Time", time_input)
+            .description("Listening Party time (e.g. +5, XX:20)");
+
+        let desc = msg.content.split(SEPARATOR).nth(3);
+        let desc_input_id = format!("desc.{lp_id}");
+        let mut description_input =
+            CreateInputText::new(InputTextStyle::Paragraph, desc_input_id).required(false);
+        if let Some(desc) = desc {
+            description_input = description_input.value(desc);
+        }
+        let description_field = CreateLabel::input_text("Description", description_input);
         let mut fields = vec![
             CreateModalComponent::Label(album_field),
             CreateModalComponent::Label(link_field),
@@ -863,6 +984,7 @@ impl Module for ModLp {
         store.register::<SetWebhook>();
         store.register::<EditLp>();
         store.register::<CreateLp>();
+        store.register::<EditListeningParty>();
         completions.push(ModLp::complete_lp);
     }
 }

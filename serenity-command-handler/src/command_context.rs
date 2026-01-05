@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use serenity::{
     all::{
-        Component, CreateAttachment, GenericChannelId, GuildId, Label, LabelComponent, Member,
+        ModalComponent, CreateAttachment, GenericChannelId, GuildId, Label, LabelComponent, Member,
         ModalInteraction, RoleId, User,
     },
     async_trait,
@@ -198,9 +198,9 @@ pub fn get_focused_option(options: &[CommandDataOption]) -> Option<&str> {
         .map(|opt| opt.name.as_str())
 }
 
-pub fn get_text_input_value<'a>(components: &'a [Component], id: &'_ str) -> Option<&'a str> {
+pub fn get_text_input_value<'a>(components: &'a [ModalComponent], id: &'_ str) -> Option<&'a str> {
     components.iter().find_map(|row| {
-        let Component::Label(Label {
+        let ModalComponent::Label(Label {
             component: LabelComponent::InputText(t),
             ..
         }) = row
@@ -215,11 +215,11 @@ pub fn get_text_input_value<'a>(components: &'a [Component], id: &'_ str) -> Opt
     })
 }
 
-pub fn get_select_values<'a>(components: &'a [Component], id: &'_ str) -> &'a [String] {
+pub fn get_select_values<'a>(components: &'a [ModalComponent], id: &'_ str) -> &'a [String] {
     components
         .iter()
         .find_map(|row| {
-            let Component::Label(Label {
+            let ModalComponent::Label(Label {
                 component: LabelComponent::SelectMenu(m),
                 ..
             }) = row
