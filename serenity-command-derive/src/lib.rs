@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::{
-    Attribute, Data, DeriveInput, Fields, FieldsNamed, FieldsUnnamed, GenericArgument, Lit, Meta,
-    NestedMeta, PathArguments, Type, parse_macro_input, spanned::Spanned,
+    Attribute, Data, DeriveInput, Expr, Fields, FieldsNamed, FieldsUnnamed, GenericArgument, Lit, Meta, PathArguments, Token, Type, parse_macro_input, punctuated::Punctuated, spanned::Spanned,
+        ExprLit,
 };
 
 struct Attr {
@@ -27,27 +27,26 @@ fn get_attr_value(attrs: &[Attr], name: &str) -> syn::Result<Option<String>> {
         .map(|a| a.value.clone()))
 }
 
-fn get_attr_list(attrs: &[Attribute]) -> Option<Vec<Attr>> {
-    match attrs
+fn get_attr_list(attrs: &[Attribute]) -> Vec<Attr> {
+    attrs
         .iter()
-        .find(|a| a.path.is_ident("cmd"))?
-        .parse_meta()
-        .unwrap()
+        .filter_map(|a| match &a.meta {
+            Meta::List(list) if list.path.is_ident("cmd") => Some(list),
+                _ => None,
+        }).map(|list|
+
     {
-        Meta::List(list) => Some(
-            list.nested
-                .into_iter()
-                .filter_map(|attr| match attr {
-                    NestedMeta::Meta(Meta::NameValue(nv)) => {
+            list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated).unwrap().into_iter().filter_map(|meta| match meta {
+                    Meta::NameValue(nv) => {
                         let ident = nv.path.get_ident().unwrap();
                         let key = ident.to_string();
-                        let value = match nv.lit {
-                            Lit::Str(s) => s.value(),
+                        let value = match nv.value {
+                           Expr::Lit(ExprLit{lit: Lit::Str(s), ..}) => s.value(),
                             _ => String::new(),
                         };
                         Some(Attr { key, value })
                     }
-                    NestedMeta::Meta(Meta::Path(p)) => {
+                    Meta::Path(p) => {
                         let ident = p.get_ident().unwrap();
                         let key = ident.to_string();
                         Some(Attr {
@@ -57,10 +56,8 @@ fn get_attr_list(attrs: &[Attribute]) -> Option<Vec<Attr>> {
                     }
                     _ => None,
                 })
-                .collect::<Vec<_>>(),
-        ),
-        _ => None,
-    }
+                .collect::<Vec<_>>()
+    }).fold(Vec::new(), |mut acc, attrs| {acc.extend(attrs); acc})
 }
 
 fn check_type_is_message(span: Span, ty: &Type) -> syn::Result<()> {
@@ -85,7 +82,7 @@ fn analyze_message_command_fields(
     ident: &syn::Ident,
     fields: Fields,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    let setter = match fields {
+    let setter: proc_macro2::TokenStream = match fields {
         Fields::Named(FieldsNamed { named, .. }) if named.len() == 1 => {
             let f = named.first().unwrap();
             check_type_is_message(f.span(), &f.ty)?;
@@ -120,7 +117,7 @@ fn analyze_field(
     mut ty: &Type,
     attrs: &[Attribute],
 ) -> syn::Result<CommandOption> {
-    let attrs = get_attr_list(attrs).unwrap_or_default();
+    let attrs = get_attr_list(attrs);
     let name = get_attr_value(&attrs, "name")?.unwrap_or_else(|| ident.to_string());
     let desc = get_attr_value(&attrs, "desc")?.unwrap_or_else(|| ident.to_string());
     let find_opt = quote!(opts.options.iter().find(|o| o.name == #name).map(|o| &o.value));
@@ -249,7 +246,7 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             "Generic structs are not supported",
         ));
     }
-    let attrs = get_attr_list(&attrs).unwrap_or_default();
+    let attrs = get_attr_list(&attrs);
     let s = match data {
         Data::Struct(s) => s,
         _ => {
@@ -274,13 +271,8 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         (constructor, vec![builder], quote!(), set_type)
     } else {
         let fields = match s.fields {
-            Fields::Named(f) => f,
-            Fields::Unit => FieldsNamed {
-                brace_token: syn::token::Brace {
-                    span: Span::call_site(),
-                },
-                named: Default::default(),
-            },
+            Fields::Named(f) => f.named,
+            Fields::Unit => Default::default(),
             _ => {
                 return Err(syn::Error::new(
                     ident.span(),
@@ -288,9 +280,8 @@ fn derive(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 ));
             }
         };
-        let field_names = fields.named.iter().flat_map(|f| f.ident.as_ref());
+        let field_names = fields.iter().flat_map(|f| f.ident.as_ref());
         let opts: Vec<_> = fields
-            .named
             .iter()
             .map(|f| analyze_field(f.ident.as_ref().unwrap(), &f.ty, &f.attrs))
             .collect::<syn::Result<_>>()?;
