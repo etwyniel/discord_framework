@@ -12,12 +12,12 @@ workspace = true
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 rspotify = { version = "0.15", features = ["cli"] }
 rspotify-http = "0.15"
-rusqlite = { version = "0.37", features = ["chrono"] }
+rusqlite = { version = "0.38", features = ["chrono", "fallible_uint"] }
 regex = "1.6"
 anyhow = "1.0"
 serenity-command-derive = { version = "0.1.0", path = "../serenity-command-derive" }
 serenity-command = { version = "0.1.0", path = "../serenity-command" }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "form", "query"] }
 chrono = "0.4.24"
 futures = "0.3.27"
 image = "0.25"
