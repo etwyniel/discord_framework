@@ -36,6 +36,7 @@ use crate::command_context::{get_select_values, get_text_input_value};
 use crate::modules::lp::Lp;
 
 pub type CommandStore = serenity_command::CommandStore<'static, Handler>;
+pub type ModalCommandStore = serenity_command::ModalCommandStore<'static, Handler>;
 
 type SpecialCommand = for<'a> fn(
     &'a Handler,
@@ -112,6 +113,7 @@ pub struct Handler {
     pub db: Arc<Mutex<Db>>,
     pub management_guild: GuildId,
     pub commands: RwLock<CommandStore>,
+    pub modal_commands: RwLock<ModalCommandStore>,
     pub http: OnceCell<Arc<Http>>,
     pub modules: ModuleMap,
     pub module_list: Vec<Arc<dyn Module>>,
@@ -129,6 +131,7 @@ impl Handler {
             db,
             management_guild,
             commands: Default::default(),
+            modal_commands: Default::default(),
             modules: Default::default(),
             module_list: Default::default(),
             special_commands: Default::default(),
@@ -251,6 +254,7 @@ pub struct HandlerBuilder {
     pub db: Db,
     pub management_guild: GuildId,
     pub commands: CommandStore,
+    pub modal_commands: ModalCommandStore,
     pub modules: ModuleMap,
     pub module_list: Vec<Arc<dyn Module>>,
     pub special_commands: HashMap<String, SpecialCommand>,
@@ -267,7 +271,7 @@ impl HandlerBuilder {
         self = M::add_dependencies(self).await?;
         let mut m = M::init(&self.modules).await?;
         m.setup(&mut self.db).await?;
-        m.register_commands(&mut self.commands, &mut self.completion_handlers);
+        m.register_commands(&mut self.commands, &mut self.modal_commands, &mut self.completion_handlers);
         let module: Arc<M> = m.into();
         Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
         self.modules.add(Arc::clone(&module));
@@ -281,7 +285,7 @@ impl HandlerBuilder {
         }
         self = M::add_dependencies(self).await?;
         m.setup(&mut self.db).await?;
-        m.register_commands(&mut self.commands, &mut self.completion_handlers);
+        m.register_commands(&mut self.commands, &mut self.modal_commands, &mut self.completion_handlers);
         let module: Arc<M> = m.into();
         Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
         self.modules.add(Arc::clone(&module));
@@ -299,6 +303,7 @@ impl HandlerBuilder {
             db,
             management_guild,
             commands,
+            modal_commands,
             modules,
             module_list,
             special_commands,
@@ -310,6 +315,7 @@ impl HandlerBuilder {
             db: Arc::new(Mutex::new(db)),
             management_guild,
             commands: RwLock::new(commands),
+            modal_commands: RwLock::new(modal_commands),
             http: OnceCell::new(),
             modules,
             module_list,
@@ -330,6 +336,7 @@ pub trait Module: 'static + Send + Sync {
     fn register_commands(
         &self,
         _store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
         _completion_handlers: &mut CompletionStore,
     ) {
     }
@@ -368,6 +375,6 @@ impl<T: 'static + Send + Sync + Module> TypeMapKey for KeyWrapper<T> {
 
 pub mod prelude {
     pub use super::{
-        CommandStore, CompletionStore, Handler, HandlerBuilder, InteractionExt, Module, ModuleMap,
+        ModalCommandStore, CommandStore, CompletionStore, Handler, HandlerBuilder, InteractionExt, Module, ModuleMap, RegisterableModule
     };
 }

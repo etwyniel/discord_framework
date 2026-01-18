@@ -10,8 +10,8 @@ use serenity::{
 use serenity_command::{BotCommand, CommandBuilder, CommandKey, CommandResponse};
 use serenity_command_derive::Command;
 
+use crate::prelude::*;
 use crate::{
-    CommandStore, CompletionStore, Handler, Module, RegisterableModule,
     command_context::{get_focused_option, get_str_opt_ac},
 };
 
@@ -207,6 +207,7 @@ impl Module for ModManagement {
     fn register_commands(
         &self,
         store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
         completion_handlers: &mut CompletionStore,
     ) {
         store.register::<EnableCommandForGuild>();

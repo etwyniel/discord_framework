@@ -436,6 +436,7 @@ impl Module for Pinboard {
     fn register_commands(
         &self,
         store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
         _completion_handlers: &mut CompletionStore,
     ) {
         store.register::<SetPinboardWebhook>();

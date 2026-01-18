@@ -382,7 +382,7 @@ impl Module for ModPoll {
         Ok(Default::default())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _completions: &mut CompletionStore) {
         store.register::<ReadyPoll>();
     }
 }

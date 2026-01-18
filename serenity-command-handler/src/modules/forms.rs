@@ -957,7 +957,7 @@ impl Module for Forms {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
         store.register::<CommandFromForm>();
         store.register::<ListForms>();
         store.register::<DeleteFormCommand>();

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serenity::async_trait;
 use serenity::builder::{CreateCommand, CreateCommandOption};
 use serenity::model::Permissions;
-use serenity::model::application::{CommandData, CommandInteraction, CommandType};
+use serenity::model::application::{CommandData, CommandInteraction, ModalInteraction, CommandType};
 use serenity::model::prelude::GuildId;
 use serenity::prelude::Context;
 
@@ -86,5 +86,32 @@ pub trait CommandRunner<T> {
 
     fn is_management(&self) -> bool {
         false
+    }
+}
+
+#[async_trait]
+pub trait ModalCommandRunner<T> {
+    async fn run(
+        &self,
+        data: &T,
+        ctx: &Context,
+        interaction: &ModalInteraction,
+    ) -> anyhow::Result<CommandResponse>;
+    fn name(&self) -> &'static str;
+}
+
+pub struct ModalCommandStore<'a, T>(
+    pub HashMap<&'a str, Box<dyn ModalCommandRunner<T> + Send + Sync>>,
+);
+
+impl<T> Default for ModalCommandStore<'_, T> {
+    fn default() -> Self {
+        ModalCommandStore(HashMap::default())
+    }
+}
+
+impl<T> ModalCommandStore<'_, T> {
+    pub fn register<B: ModalCommandRunner< T> + Send + Sync + 'static>(&mut self, runner: B) {
+        self.0.insert(runner.name(), Box::new(runner));
     }
 }

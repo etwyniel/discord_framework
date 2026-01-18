@@ -794,7 +794,7 @@ impl Module for Quotes {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
         store.register::<GetQuote>();
         store.register::<SaveQuote>();
         store.register::<FakeQuote>();

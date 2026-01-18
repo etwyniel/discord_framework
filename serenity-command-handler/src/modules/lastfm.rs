@@ -1106,7 +1106,7 @@ impl Module for Lastfm {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
         store.register::<GetAotys>();
         store.register::<FixReleaseYear>();
         completions.push(complete_album);

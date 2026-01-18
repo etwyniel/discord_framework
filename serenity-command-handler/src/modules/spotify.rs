@@ -5,7 +5,7 @@ use std::{
     sync::{LazyLock, atomic::AtomicU64},
 };
 
-use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule};
+use crate::prelude::*;
 use anyhow::{Context as _, anyhow, bail};
 use regex::Regex;
 use reqwest::redirect::Policy;
@@ -397,7 +397,7 @@ pub struct Unlink(Message);
 
 #[async_trait]
 impl Module for Spotify<ClientCredsSpotify> {
-    fn register_commands(&self, store: &mut CommandStore, _: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _: &mut CompletionStore) {
         store.register::<Unlink>();
     }
 }
@@ -507,7 +507,7 @@ impl Module for Spotify<AuthCodeSpotify> {
         db.add_guild_field("spotify_user_id", "STRING")
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _: &mut CompletionStore) {
         store.register::<SpotifyAuthenticate>();
     }
     //

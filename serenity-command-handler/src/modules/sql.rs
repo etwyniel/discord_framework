@@ -10,7 +10,7 @@ use serenity_command::{BotCommand, CommandResponse};
 use serenity_command_derive::Command;
 
 use crate::{
-    db::Db, CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule,
+    db::Db, prelude::*,
 };
 
 #[derive(Command)]
@@ -111,7 +111,7 @@ impl Module for Sql {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _completions: &mut CompletionStore) {
         store.register::<Query>();
     }
 }

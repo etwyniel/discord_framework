@@ -977,7 +977,7 @@ impl Module for ModLp {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
         store.register::<Lp>();
         store.register::<SetRole>();
         store.register::<SetCreateThreads>();

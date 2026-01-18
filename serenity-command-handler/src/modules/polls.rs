@@ -21,7 +21,7 @@ use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::time::timeout;
 
 use crate::{
-    CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule, events,
+    prelude::*, events,
 };
 
 const YES: &str = "<:FeelsGoodCrab:988509541069127780>";
@@ -552,7 +552,7 @@ impl Default for ModPoll {
 
 #[async_trait]
 impl Module for ModPoll {
-    fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _completions: &mut CompletionStore) {
         store.register::<ReadyPoll>();
         store.register::<Poll>();
     }

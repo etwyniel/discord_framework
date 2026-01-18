@@ -333,9 +333,9 @@ impl Module for ModAutoreacts {
         Ok(())
     }
 
-    fn register_commands(&self, commands: &mut CommandStore, completions: &mut CompletionStore) {
-        commands.register::<AddAutoreact>();
-        commands.register::<RemoveAutoreact>();
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
+        store.register::<AddAutoreact>();
+        store.register::<RemoveAutoreact>();
 
         completions.push(ModAutoreacts::complete_reacts);
     }

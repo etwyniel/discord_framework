@@ -9,9 +9,7 @@ use std::sync::Arc;
 
 use crate::album::{Album, AlbumProvider};
 use crate::modules::{Bandcamp, Lastfm, Spotify, Tidal};
-use crate::{
-    CommandStore, CompletionStore, Handler, HandlerBuilder, Module, ModuleMap, RegisterableModule,
-};
+use crate::prelude::*;
 
 use anyhow::Context as _;
 
@@ -167,7 +165,7 @@ impl AlbumLookup {
 
 #[async_trait]
 impl Module for AlbumLookup {
-    fn register_commands(&self, store: &mut CommandStore, _completions: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _completions: &mut CompletionStore) {
         store.register::<LookupAlbum>();
     }
 }

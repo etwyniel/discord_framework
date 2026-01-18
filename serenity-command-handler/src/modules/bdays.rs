@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use tokio::time::interval;
 
 use crate::db::Db;
-use crate::{CommandStore, CompletionStore, Handler, Module, ModuleMap, RegisterableModule};
+use crate::prelude::*;
 
 pub struct Birthday {
     pub user_id: u64,
@@ -270,7 +270,7 @@ impl Module for Bdays {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _: &mut CompletionStore) {
+    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _: &mut CompletionStore) {
         store.register::<GetBdays>();
         store.register::<SetBday>();
     }
