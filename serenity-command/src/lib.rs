@@ -2,13 +2,19 @@ use std::collections::HashMap;
 
 use serenity::async_trait;
 use serenity::builder::{CreateCommand, CreateCommandOption};
+use serenity::futures::future::BoxFuture;
 use serenity::model::Permissions;
-use serenity::model::application::{CommandData, CommandInteraction, ModalInteraction, CommandType};
+use serenity::model::application::{
+    CommandData, CommandInteraction, CommandType, ModalInteraction,
+};
 use serenity::model::prelude::GuildId;
 use serenity::prelude::Context;
 
 mod command_response;
 pub use command_response::*;
+
+mod command_data;
+pub use command_data::*;
 
 pub type CommandKey<'a> = (&'a str, CommandType);
 
@@ -111,7 +117,17 @@ impl<T> Default for ModalCommandStore<'_, T> {
 }
 
 impl<T> ModalCommandStore<'_, T> {
-    pub fn register<B: ModalCommandRunner< T> + Send + Sync + 'static>(&mut self, runner: B) {
+    pub fn register<B: ModalCommandRunner<T> + Send + Sync + 'static>(&mut self, runner: B) {
         self.0.insert(runner.name(), Box::new(runner));
     }
+}
+
+pub struct CommandConst<T> {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub func: for<'a> fn(
+        &'a T,
+        &'a Context,
+        &'a CommandInteraction,
+    ) -> BoxFuture<'a, anyhow::Result<CommandResponse>>,
 }

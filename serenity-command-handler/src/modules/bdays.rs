@@ -4,6 +4,8 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{Datelike, Local, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use rusqlite::params;
 use serenity::all::{ChannelId, UserId};
 use serenity::builder::{CreateCommandOption, CreateEmbed, CreateEmbedAuthor};
@@ -11,7 +13,7 @@ use serenity::http::Http;
 use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::GuildId;
 use serenity::{async_trait, prelude::Context};
-use serenity_command::{BotCommand, CommandResponse};
+use serenity_command::{args, BotCommand, CommandConst, CommandResponse};
 use serenity_command_derive::Command;
 use tokio::sync::Mutex;
 use tokio::time::interval;
@@ -68,6 +70,46 @@ async fn get_bdays(handler: &Handler, guild_id: u64) -> anyhow::Result<Vec<Birth
 #[cmd(name = "bdays", desc = "List server birthdays")]
 pub struct GetBdays;
 
+pub const GetBdaysC: CommandConst<Handler> = CommandConst {
+    name: "bdays",
+    description: "List server birthdays",
+    func: get_bdays_c,
+};
+
+fn get_bdays_c<'a>(handler: &'a Handler, ctx: &'a Context, command: &'a CommandInteraction) -> BoxFuture<'a, anyhow::Result<CommandResponse>> {
+    async move {
+        let guild_id = command
+            .guild_id
+            .ok_or_else(|| anyhow!("Must be run in a guild"))?
+            .get();
+        let mut bdays = get_bdays(handler, guild_id).await?;
+        let today = Utc::now().date_naive();
+        let current_day = today.day() as u8;
+        let current_month = today.month() as u8;
+        bdays.sort_unstable_by_key(|Birthday { day, month, .. }| {
+            let mut month = *month;
+            if month < current_month || (month == current_month && *day < current_day) {
+                month += 12;
+            }
+            month as u64 * 31 + *day as u64
+        });
+        let res = bdays
+            .into_iter()
+            .map(|b| format!("`{:02}/{:02}` • <@{}>", b.day, b.month, b.user_id))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let header = if let Some(server) = command.guild_id.and_then(|g| g.name(&ctx.cache)) {
+            format!("Birthdays in {server}")
+        } else {
+            "Birthdays".to_string()
+        };
+        let embed = CreateEmbed::default()
+            .author(CreateEmbedAuthor::new(header))
+            .description(res);
+        CommandResponse::public(embed)
+    }.boxed()
+}
+
 #[async_trait]
 impl BotCommand for GetBdays {
     type Data = Handler;
@@ -108,6 +150,15 @@ impl BotCommand for GetBdays {
         CommandResponse::public(embed)
     }
 }
+
+args!(SET_BDAY =
+    "Day"
+    day: i64,
+    "Month"
+    month: i64,
+    "Year"
+    year: Option<i64>,
+);
 
 #[derive(Command)]
 #[cmd(name = "bday", desc = "Set your birthday")]

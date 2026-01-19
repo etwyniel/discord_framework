@@ -46,7 +46,7 @@ use crate::album::Album;
 use crate::command_context::{InteractionExt, Responder, get_focused_option, get_str_opt_ac};
 use crate::modules::{Bandcamp, Lastfm, Spotify};
 use crate::prelude::*;
-use serenity_command::CommandResponse;
+use serenity_command::{ArgList, CommandConst, CommandResponse, args};
 use serenity_command::{BotCommand, CommandKey};
 
 use super::{AlbumLookup, Tidal};
@@ -64,6 +64,19 @@ pub struct ResolvedLp {
     pub resolved_start: Option<DateTime<Utc>>,
     #[serde(flatten)]
     pub params: Lp,
+}
+
+args!{LP_ARGS = 
+    "What you will be listening to (e.g. band - album, spotify/bandcamp link)"
+    album[autocomplete]: String,
+     "(Optional) Link to the album/playlist (Spotify, Youtube, Bandcamp...)"
+    link[autocomplete]: Option<String>,
+     "Time at which the LP will take place (e.g. XX:20, +5)"
+    time: Option<String>,
+     "Where to look for album info (defaults to spotify)"
+    provider: Option<String>,
+     "Use a specific role instead of the default (admin-only)"
+    role: Option<RoleId>,
 }
 
 #[derive(Command, Serialize, Deserialize, Debug)]
@@ -440,6 +453,26 @@ impl Lp {
         }
         Ok(CommandResponse::None)
     }
+}
+
+const LpCommand: CommandConst<Handler> = CommandConst{
+    name: "lp",
+    description:  "run a listening party",
+    func: lp_func,
+};
+
+fn lp_func<'a>(handler: &'a Handler, ctx: &'a Context, command: &'a CommandInteraction) -> BoxFuture<'a, anyhow::Result<CommandResponse>> {
+  async move {
+    let (album, link, time, provider, role) = LP_ARGS.parse(&command.data).unwrap();
+    let params = Lp{
+      album,
+      link,
+      time,
+      provider,
+      role,
+    };
+    params.run_lp(handler, ctx, command, None).await
+  }.boxed()
 }
 
 #[async_trait]
