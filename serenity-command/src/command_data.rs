@@ -8,6 +8,12 @@ use serenity::all::{
 pub trait FromOptionValue: Sized {
     fn from_option_value(value: &CommandDataOptionValue) -> Option<Self>;
     fn kind() -> CommandOptionType;
+    fn reqired() -> bool {
+        true
+    }
+    fn default() -> Option<Self> {
+        None
+    }
 }
 
 impl FromOptionValue for String {
@@ -96,6 +102,14 @@ impl<T: FromOptionValue> FromOptionValue for Option<T> {
     fn kind() -> CommandOptionType {
         T::kind()
     }
+
+    fn reqired() -> bool {
+        false
+    }
+
+    fn default() -> Option<Self> {
+        Some(None)
+    }
 }
 
 pub trait CommandDataExt {
@@ -109,6 +123,7 @@ impl CommandDataExt for CommandData {
             .iter()
             .find(|opt| opt.name == field)
             .and_then(|opt| T::from_option_value(&opt.value))
+            .or_else(T::default)
     }
 
     fn arg<T: FromOptionValue>(&self, arg: &Arg<T>) -> Option<T> {
@@ -116,13 +131,14 @@ impl CommandDataExt for CommandData {
             .iter()
             .find(|opt| opt.name == arg.name)
             .and_then(|opt| T::from_option_value(&opt.value))
+            .or_else(T::default)
     }
 }
 
 pub struct Arg<T> {
     pub name: &'static str,
     pub description: &'static str,
-    autocomplete: bool,
+    pub autocomplete: bool,
     arg_t: PhantomData<T>,
 }
 
@@ -140,6 +156,7 @@ impl<T: FromOptionValue> Arg<T> {
             self.description.to_string(),
         )
         .set_autocomplete(self.autocomplete)
+        .required(T::reqired())
     }
 }
 
@@ -165,7 +182,7 @@ pub trait ArgList {
         command: CreateCommand<'static>,
         extra: fn(&str, CreateCommandOption<'static>) -> CreateCommandOption<'static>,
     ) -> CreateCommand<'static>;
-    fn parse(&self, data: &CommandData) -> Option<Self::Output>;
+    fn parse(&self, data: &CommandData) -> anyhow::Result<Self::Output>;
 }
 
 macro_rules! tuple_impls {
@@ -178,16 +195,19 @@ macro_rules! tuple_impls {
     };
     (@impl $( $T:ident )+) => {
         #[allow(nonstandard_style)]
-        impl<$($T: FromOptionValue),+> ArgList for ($(Arg<$T>,)+) {
+        impl<$($T: FromOptionValue + std::fmt::Debug),+> ArgList for ($(Arg<$T>,)+) {
             type Output = ($( $T, )+);
-            fn add_options_with(&self, command: CreateCommand<'static>, extra: fn(&str, CreateCommandOption<'static>) -> CreateCommandOption<'static>) -> CreateCommand<'static> {
+            fn add_options_with(&self, command: CreateCommand<'static>, extra: fn(&str, CreateCommandOption<'static>)
+                -> CreateCommandOption<'static>) -> CreateCommand<'static>
+            {
                 let ($($T,)+) = self;
                 command $( .add_option(extra($T.name, $T.as_option())) )+
             }
 
-            fn parse(&self, data: &CommandData) -> Option<($( $T, )+)> {
+            fn parse(&self, data: &CommandData) -> anyhow::Result<($( $T, )+)> {
+                use anyhow::Context;
                 let ($($T,)+) = self;
-                Some(($( $T.value(data)?, )+))
+                Ok(($( $T.value(data).context(format!("no value for required argument {}", $T.name))?, )+))
             }
         }
     };
@@ -198,22 +218,24 @@ tuple_impls!(E D C B A Z Y X W V U T);
 #[macro_export]
 macro_rules! arg {
     ($arg:ident$([])*: $T:ty) => {
-        $crate::arg!("" $arg: $T)
+        $crate::Arg::<$T>::new(stringify!($arg), stringify!($arg), false)
     };
     ($arg:ident[autocomplete]: $T:ty) => {
-        $crate::arg!("" $arg[autocomplete]: $T)
+        $crate::Arg::<$T>::new(stringify!($arg), stringify!($arg), true)
     };
     ($desc:literal $arg:ident$([])*: $T:ty) => {
-        $crate::Arg::<$T>::new(stringify!(arg), $desc, false)
+        $crate::Arg::<$T>::new(stringify!($arg), $desc, false)
     };
     ($desc:literal $arg:ident[autocomplete]: $T:ty) => {
-        $crate::Arg::<$T>::new(stringify!(arg), $desc, true)
+        $crate::Arg::<$T>::new(stringify!($arg), $desc, true)
     };
 }
 
 #[macro_export]
 macro_rules! args {
     ($name:ident = $( $($desc:literal)* $arg:ident$([$($extra:ident)*])*: $T:ty ),* $(,)*) => {
+        #[allow(nonstandard_style)]
+        type $name = ( $( $T, )+ );
         const $name: ( $($crate::Arg<$T>,)+ ) = ( $( $crate::arg!($($desc)* $arg[$($($extra)*)*]: $T), )+ );
     };
 }

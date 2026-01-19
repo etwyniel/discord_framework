@@ -185,7 +185,14 @@ macro_rules! command {
     }};
     (/$name:ident $args:ident: $f:expr) => {{
         use serenity::futures::FutureExt;
-        let f: $crate::CommandFunc<_> = |h, c, cmd| async move { ($f)(h, c, cmd).await }.boxed();
+        use $crate::ArgList;
+        let f: $crate::CommandFunc<_> = |h, c, cmd| {
+            async move {
+                let args = $args.parse(&cmd.data)?;
+                ($f)(args, h, c, cmd).await
+            }
+            .boxed()
+        };
         $crate::CommandConst {
             register_options: |cmd| $args.add_options(cmd),
             ..$crate::command_default(stringify!($name), f)
@@ -193,7 +200,14 @@ macro_rules! command {
     }};
     (/$name:ident $args:ident($extra:ident): $f:expr) => {{
         use serenity::futures::FutureExt;
-        let f: $crate::CommandFunc<_> = |h, c, cmd| async move { ($f)(h, c, cmd).await }.boxed();
+        use $crate::ArgList;
+        let f: $crate::CommandFunc<_> = |h, c, cmd| {
+            async move {
+                let args = $args.parse(&cmd.data)?;
+                ($f)(args, h, c, cmd).await
+            }
+            .boxed()
+        };
         $crate::CommandConst {
             register_options: |cmd| $args.add_options_with(cmd, $extra),
             ..$crate::command_default(stringify!($name), f)
@@ -201,7 +215,20 @@ macro_rules! command {
     }};
     (/$name:ident(Message): $f:expr) => {{
         use serenity::futures::FutureExt;
-        let f: $crate::CommandFunc<_> = |h, c, cmd| async move { ($f)(h, c, cmd).await }.boxed();
+        let f: $crate::CommandFunc<_> = |h, c, cmd| {
+            async move {
+                use anyhow::Context;
+                let msg = cmd
+                    .data
+                    .resolved
+                    .messages
+                    .iter()
+                    .next()
+                    .context("missing message for message command")?;
+                ($f)(msg, h, c, cmd).await
+            }
+            .boxed()
+        };
         $crate::CommandConst {
             ty: serenity::model::application::CommandType::Message,
             ..$crate::command_default(stringify!($name), f)

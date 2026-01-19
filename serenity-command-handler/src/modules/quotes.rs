@@ -37,7 +37,7 @@ use serenity::{
     prelude::{Context, Mutex},
 };
 
-use serenity_command::{ArgList, CommandKey, CommandResponse, args, command};
+use serenity_command::{CommandKey, CommandResponse, args, command};
 use tokio::time::interval;
 
 use crate::{RegisterableModule, command_context::get_str_opt_ac, db::Db, prelude::*};
@@ -392,11 +392,11 @@ pub struct GetQuote {
 }
 
 async fn get_quote(
+    (number, user, hide_author): QUOTE_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (number, user, hide_author) = QUOTE_ARGS.parse(&command.data).unwrap();
     let guild_id = command.guild_id()?.get();
     let params = GetQuote {
         number,
@@ -531,12 +531,12 @@ const SAVE_QUOTE: CommandConst = CommandConst {
 };
 
 async fn save_quote(
+    msg: &Message,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?.get();
-    let msg = command.data.resolved.messages.iter().next().unwrap();
     // messages received through command interactions are partial
     // retrieve full message to have referenced_message
     let message = ctx.http.get_message(msg.channel_id, msg.id).await?;
@@ -574,11 +574,11 @@ fn set_fake_quote_options(
 }
 
 async fn get_fake_quote(
+    (user, start, order): FAKE_QUOTE_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (user, start, order) = FAKE_QUOTE_ARGS.parse(&command.data).unwrap();
     let (chain, quotes) = quotes_markov_chain(
         handler,
         command

@@ -45,8 +45,8 @@ use crate::album::Album;
 use crate::command_context::{InteractionExt, Responder, get_focused_option, get_str_opt_ac};
 use crate::modules::{Bandcamp, Lastfm, Spotify};
 use crate::prelude::*;
-use serenity_command::{ArgList, CommandResponse, args, command};
 use serenity_command::{BotCommand, CommandKey};
+use serenity_command::{CommandResponse, args, command};
 
 use super::{AlbumLookup, Tidal};
 
@@ -63,19 +63,6 @@ pub struct ResolvedLp {
     pub resolved_start: Option<DateTime<Utc>>,
     #[serde(flatten)]
     pub params: Lp,
-}
-
-args! {LP_ARGS =
-    "What you will be listening to (e.g. band - album, spotify/bandcamp link)"
-    album[autocomplete]: String,
-     "(Optional) Link to the album/playlist (Spotify, Youtube, Bandcamp...)"
-    link[autocomplete]: Option<String>,
-     "Time at which the LP will take place (e.g. XX:20, +5)"
-    time: Option<String>,
-     "Where to look for album info (defaults to spotify)"
-    provider: Option<String>,
-     "Use a specific role instead of the default (admin-only)"
-    role: Option<RoleId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -462,17 +449,30 @@ fn set_lp_options(name: &str, opt: CreateCommandOption<'static>) -> CreateComman
     }
 }
 
+args! {LP_ARGS =
+    "What you will be listening to (e.g. band - album, spotify/bandcamp link)"
+    album[autocomplete]: String,
+     "(Optional) Link to the album/playlist (Spotify, Youtube, Bandcamp...)"
+    link[autocomplete]: Option<String>,
+     "Time at which the LP will take place (e.g. XX:20, +5)"
+    time: Option<String>,
+     "Where to look for album info (defaults to spotify)"
+    provider: Option<String>,
+     "Use a specific role instead of the default (admin-only)"
+    role: Option<RoleId>,
+}
+
 const LP: CommandConst = CommandConst {
     description: "run a listening party",
     ..command!(/lp LP_ARGS(set_lp_options): lp_func)
 };
 
 async fn lp_func(
+    (album, link, time, provider, role): LP_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (album, link, time, provider, role) = LP_ARGS.parse(&command.data).unwrap();
     let params = Lp {
         album,
         link,
@@ -520,13 +520,13 @@ const SETCREATETHREADS: CommandConst = CommandConst {
 };
 
 async fn set_create_threads(
+    (create_threads,): SETCREATETHREADS_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?.get();
     let db = handler.db.lock().await;
-    let (create_threads,) = SETCREATETHREADS_ARGS.parse(&command.data).unwrap();
     db.set_guild_field(guild_id, "create_threads", create_threads)
         .context("updating 'create_threads' guild field")?;
     let resp = if create_threads {
@@ -548,11 +548,11 @@ const SETROLE: CommandConst = CommandConst {
 };
 
 async fn setrole(
+    (role,): SETROLE_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (role,) = SETROLE_ARGS.parse(&command.data).unwrap();
     let guild_id = command.guild_id()?.get();
     let role = role.as_ref().map(|r| r.get().to_string());
     let db = handler.db.lock().await;
@@ -577,13 +577,13 @@ const SETWEBHOOK: CommandConst = CommandConst {
 };
 
 async fn setwebhook(
+    (webhook,): SETWEBHOOK_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?.get();
     let db = handler.db.lock().await;
-    let (webhook,) = SETWEBHOOK_ARGS.parse(&command.data).unwrap();
     db.set_guild_field(guild_id, "webhook", webhook.as_ref())
         .context("updating 'webhook' guild field")?;
     let resp = if webhook.is_some() {
@@ -608,7 +608,6 @@ const EDIT_LP: CommandConst = CommandConst {
 pub struct EditLp {
     album: Option<String>,
     time: Option<String>,
-    cancel: Option<bool>,
 }
 
 impl EditLp {
@@ -673,11 +672,11 @@ impl EditLp {
 }
 
 async fn edit_lp(
+    (album, time, cancel): EDIT_LP_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (album, time, cancel) = EDIT_LP_ARGS.parse(&command.data).unwrap();
     let author_id = command.user.id;
     let mod_lp: &ModLp = handler.module().unwrap();
     let Some((message_id, user_id)) = mod_lp
@@ -708,11 +707,7 @@ async fn edit_lp(
         return CommandResponse::public("Canceled listening party");
     }
     let desc = msg.content.split(SEPARATOR).nth(3).map(str::to_string);
-    let edit_lp = EditLp {
-        album,
-        time,
-        cancel,
-    };
+    let edit_lp = EditLp { album, time };
     match edit_lp
         .edit_from_embedded_data(handler, ctx, &mut msg, command, desc.as_deref())
         .await

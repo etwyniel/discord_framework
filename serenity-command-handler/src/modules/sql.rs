@@ -6,7 +6,7 @@ use serenity::{
     model::{Permissions, prelude::CommandInteraction, prelude::UserId},
     prelude::Context,
 };
-use serenity_command::{ArgList, CommandResponse, args, command};
+use serenity_command::{CommandResponse, args, command};
 
 use crate::{db::Db, prelude::*};
 
@@ -82,11 +82,11 @@ pub fn do_query(
 }
 
 async fn query(
+    (query,): QUERY_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (query,) = QUERY_ARGS.parse(&command.data).unwrap();
     let db = handler.db.lock().await;
     do_query(&query, db.conn(), command.user.id, true)
 }

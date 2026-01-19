@@ -31,7 +31,7 @@ use crate::{
     },
     prelude::*,
 };
-use serenity_command::{ArgList, CommandKey, CommandResponse, args, command};
+use serenity_command::{CommandKey, CommandResponse, args, command};
 
 use super::complete::process_autocomplete;
 
@@ -393,13 +393,12 @@ pub struct CommandFromForm {
 }
 
 async fn command_from_form(
+    (command_name, form_id, submission_type): COMMAND_FROM_FORM_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?;
-    let (command_name, form_id, submission_type) =
-        COMMAND_FROM_FORM_ARGS.parse(&command.data).unwrap();
     let params = CommandFromForm {
         command_name,
         form_id,
@@ -507,12 +506,12 @@ pub const REFRESH_FORM_COMMAND: CommandConst = CommandConst {
 };
 
 async fn refresh_command(
+    (command_name,): REFRESH_FORM_COMMAND_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?;
-    let (command_name,) = REFRESH_FORM_COMMAND_ARGS.parse(&command.data).unwrap();
     let (form, submission_type): (String, Option<String>) = {
         let db = handler.db.lock().await;
         db.conn()
@@ -544,12 +543,12 @@ pub const DELETE_FORM_COMMAND: CommandConst = CommandConst {
 };
 
 async fn delete_command(
+    (command_name,): DELETE_FORM_COMMAND_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?;
-    let (command_name,) = DELETE_FORM_COMMAND_ARGS.parse(&command.data).unwrap();
     if let Some(cmd) = guild_id
         .get_commands(&ctx.http)
         .await?
@@ -612,12 +611,12 @@ pub const OVERRIDE_SUBMISSION_RANGE: CommandConst = CommandConst {
 };
 
 async fn override_range(
+    (command_name, range): OVERRIDE_RANGE_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?.get();
-    let (command_name, range) = OVERRIDE_RANGE_ARGS.parse(&command.data).unwrap();
     let module = handler.module::<Forms>()?;
     let mut forms = module.forms.write().await;
     let form = forms
@@ -847,11 +846,11 @@ pub const GET_SUBMISSIONS: CommandConst = CommandConst {
 };
 
 async fn get_submissions(
+    (command_name,): GET_SUBMISSIONS_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (command_name,) = GET_SUBMISSIONS_ARGS.parse(&command.data).unwrap();
     let forms: &Forms = handler.module()?;
     let forms = forms.forms.read().await;
     let cmd_name = &command_name;

@@ -11,7 +11,7 @@ use serenity::http::Http;
 use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::GuildId;
 use serenity::{async_trait, prelude::Context};
-use serenity_command::{ArgList, CommandResponse, args, command};
+use serenity_command::{CommandResponse, args, command};
 use tokio::sync::Mutex;
 use tokio::time::interval;
 
@@ -151,11 +151,11 @@ pub const SET_BDAY: CommandConst = CommandConst {
 };
 
 async fn set_bday(
+    (day, month, year): SET_BDAY_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (day, month, year) = SET_BDAY_ARGS.parse(&command.data).unwrap();
     let user_id = command.user.id.get();
     let guild_id = command.guild_id()?.get();
     add_birthday(

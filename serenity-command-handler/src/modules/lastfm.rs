@@ -19,7 +19,7 @@ use serenity::builder::{
 use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::CommandType;
 use serenity::prelude::{Context, Mutex};
-use serenity_command::{ArgList, CommandKey, CommandResponse, args, command};
+use serenity_command::{CommandKey, CommandResponse, args, command};
 
 use std::collections::HashMap;
 use std::env;
@@ -255,11 +255,11 @@ pub struct GetAotys {
 }
 
 async fn get_aotys(
+    (username, year, year_range, skip): GETAOTYS_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (username, year, year_range, skip) = GETAOTYS_ARGS.parse(&command.data).unwrap();
     command
         .create_response(
             &ctx.http,
@@ -445,6 +445,7 @@ pub struct GetSotys {
 }
 
 async fn get_soty(
+    (username, year, skip): SOTY_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
@@ -455,7 +456,6 @@ async fn get_soty(
             CreateInteractionResponse::Defer(Default::default()),
         )
         .await?;
-    let (username, year, skip) = SOTY_ARGS.parse(&command.data).unwrap();
     let params = GetSotys {
         username,
         year,
@@ -1025,11 +1025,11 @@ const FIX_RELEASE_YEAR: CommandConst = CommandConst {
 };
 
 async fn fix_release_year(
+    (album, artist, year): FIX_RELEASE_YEAR_ARGS,
     handler: &Handler,
     _ctx: &Context,
-    command: &CommandInteraction,
+    _command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let (album, artist, year) = FIX_RELEASE_YEAR_ARGS.parse(&command.data).unwrap();
     let db = handler.db.lock().await;
     let current_value = match get_release_year_db(&db, &artist, &album) {
         Ok(y) if y == year as u64 => bail!("Release year is already {year}"),

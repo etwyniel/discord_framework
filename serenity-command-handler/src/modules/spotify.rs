@@ -390,11 +390,11 @@ pub const UNLINK: CommandConst = CommandConst {
 };
 
 async fn unlink(
+    msg: &Message,
     _: &Handler,
     _: &Context,
-    command: &CommandInteraction,
+    _command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
-    let msg = command.data.resolved.messages.iter().next().unwrap();
     let urls = resolve_spotify_links(&msg.content).await?;
     if urls.is_empty() {
         bail!("No shortened spotify links found in message");

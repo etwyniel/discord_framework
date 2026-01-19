@@ -23,7 +23,7 @@ use crate::{
     modules::{AlbumLookup, SpotifyOAuth, google_apis::sheets::ValueRange},
     prelude::*,
 };
-use serenity_command::{ArgList, CommandResponse, args, command};
+use serenity_command::{CommandResponse, args, command};
 
 #[derive(Clone, Debug)]
 pub struct PlaylistPick {
@@ -438,6 +438,7 @@ const BUILD_PLAYLIST: CommandConst = CommandConst {
 };
 
 async fn build_playlist(
+    (reuse,): BUILD_PLAYLIST_ARGS,
     handler: &Handler,
     ctx: &Context,
     command: &CommandInteraction,
@@ -449,7 +450,6 @@ async fn build_playlist(
         )
         .await?;
     let guild_id = command.guild_id()?;
-    let (reuse,) = BUILD_PLAYLIST_ARGS.parse(&command.data).unwrap();
     let res = build_playlist_from_picks(handler, ctx, guild_id, !reuse.unwrap_or(false)).await;
     let resp = match res {
         Ok(resp) => resp,

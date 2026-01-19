@@ -21,7 +21,7 @@ use crate::{
     db::Db,
     prelude::*,
 };
-use serenity_command::{ArgList, CommandKey, CommandResponse, args, command};
+use serenity_command::{CommandKey, CommandResponse, args, command};
 
 pub struct AutoReact {
     trigger: String,
@@ -77,39 +77,39 @@ args!(ADD_AUTOREACT_ARGS =
 );
 
 const ADD_AUTOREACT: CommandConst = CommandConst {
-  description:  "Automatically add reactions to messages",
-  permissions: Permissions::MANAGE_GUILD_EXPRESSIONS,
-  ..command!(/add_autoreact ADD_AUTOREACT_ARGS: add_autoreact)
+    description: "Automatically add reactions to messages",
+    permissions: Permissions::MANAGE_GUILD_EXPRESSIONS,
+    ..command!(/add_autoreact ADD_AUTOREACT_ARGS: add_autoreact)
 };
 
-    async fn add_autoreact(
-        handler: &Handler,
-        _ctx: &Context,
-        command: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-      let (trigger, emote) = ADD_AUTOREACT_ARGS.parse(&command.data).unwrap();
-        let trigger = trigger.to_lowercase();
-        let guild_id = command
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        let parsed = AutoReact::new(&trigger, &emote)?;
-        {
-            let db = handler.db.lock().await;
-            db.conn().execute(
-                "INSERT INTO autoreact (guild_id, trigger, emote) VALUES (?1, ?2, ?3)",
-                params![guild_id, &trigger, &emote],
-            )?;
-        }
-        handler
-            .reacts_cache()?
-            .write()
-            .await
-            .entry(guild_id)
-            .or_default()
-            .push(parsed);
-        CommandResponse::private("Autoreact added")
+async fn add_autoreact(
+    (trigger, emote): ADD_AUTOREACT_ARGS,
+    handler: &Handler,
+    _ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let trigger = trigger.to_lowercase();
+    let guild_id = command
+        .guild_id
+        .ok_or_else(|| anyhow!("Must be run in a guild"))?
+        .get();
+    let parsed = AutoReact::new(&trigger, &emote)?;
+    {
+        let db = handler.db.lock().await;
+        db.conn().execute(
+            "INSERT INTO autoreact (guild_id, trigger, emote) VALUES (?1, ?2, ?3)",
+            params![guild_id, &trigger, &emote],
+        )?;
     }
+    handler
+        .reacts_cache()?
+        .write()
+        .await
+        .entry(guild_id)
+        .or_default()
+        .push(parsed);
+    CommandResponse::private("Autoreact added")
+}
 
 args!(REMOVE_AUTOREACT_ARGS =
     "The word that triggers the reaction (case-insensitive)"
@@ -119,35 +119,35 @@ args!(REMOVE_AUTOREACT_ARGS =
 );
 
 const REMOVE_AUTOREACT: CommandConst = CommandConst {
-  description:  "Remove automatic reaction",
-  permissions: Permissions::MANAGE_GUILD_EXPRESSIONS,
-  ..command!(/remove_autoreact REMOVE_AUTOREACT_ARGS: remove_autoreact)
+    description: "Remove automatic reaction",
+    permissions: Permissions::MANAGE_GUILD_EXPRESSIONS,
+    ..command!(/remove_autoreact REMOVE_AUTOREACT_ARGS: remove_autoreact)
 };
 
-    async fn remove_autoreact(
-        handler: &Handler,
-        _ctx: &Context,
-        command: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-      let (trigger, emote) = REMOVE_AUTOREACT_ARGS.parse(&command.data).unwrap();
-        let trigger = trigger.to_lowercase();
-        let guild_id = command
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        {
-            let db = handler.db.lock().await;
-            db.conn().execute(
-                "DELETE FROM autoreact WHERE guild_id = ?1 AND trigger = ?2 AND emote = ?3",
-                params![guild_id, &trigger, &emote],
-            )?;
-        }
-        let emote = parse_emote(&emote)?;
-        if let Some(reacts) = handler.reacts_cache()?.write().await.get_mut(&guild_id) {
-            reacts.retain_mut(|ar| ar.trigger != trigger && ar.emote != emote);
-        };
-        CommandResponse::private("Autoreact removed")
+async fn remove_autoreact(
+    (trigger, emote): REMOVE_AUTOREACT_ARGS,
+    handler: &Handler,
+    _ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let trigger = trigger.to_lowercase();
+    let guild_id = command
+        .guild_id
+        .ok_or_else(|| anyhow!("Must be run in a guild"))?
+        .get();
+    {
+        let db = handler.db.lock().await;
+        db.conn().execute(
+            "DELETE FROM autoreact WHERE guild_id = ?1 AND trigger = ?2 AND emote = ?3",
+            params![guild_id, &trigger, &emote],
+        )?;
     }
+    let emote = parse_emote(&emote)?;
+    if let Some(reacts) = handler.reacts_cache()?.write().await.get_mut(&guild_id) {
+        reacts.retain_mut(|ar| ar.trigger != trigger && ar.emote != emote);
+    };
+    CommandResponse::private("Autoreact removed")
+}
 
 impl Handler {
     pub async fn autocomplete_autoreact(
@@ -322,7 +322,12 @@ impl Module for ModAutoreacts {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
+    fn register_commands(
+        &self,
+        store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
+        completions: &mut CompletionStore,
+    ) {
         store.register(ADD_AUTOREACT);
         store.register(REMOVE_AUTOREACT);
 
