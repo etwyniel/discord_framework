@@ -4,8 +4,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{Datelike, Local, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
-use futures::FutureExt;
-use futures::future::BoxFuture;
 use rusqlite::params;
 use serenity::all::{ChannelId, UserId};
 use serenity::builder::{CreateCommandOption, CreateEmbed, CreateEmbedAuthor};
@@ -13,8 +11,7 @@ use serenity::http::Http;
 use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::GuildId;
 use serenity::{async_trait, prelude::Context};
-use serenity_command::{args, BotCommand, CommandConst, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{ArgList, CommandResponse, args, command};
 use tokio::sync::Mutex;
 use tokio::time::interval;
 
@@ -48,7 +45,7 @@ async fn add_birthday(
     Ok(())
 }
 
-async fn get_bdays(handler: &Handler, guild_id: u64) -> anyhow::Result<Vec<Birthday>> {
+async fn get_guild_bdays(handler: &Handler, guild_id: u64) -> anyhow::Result<Vec<Birthday>> {
     let db = handler.db.lock().await;
     let res = db
         .conn()
@@ -66,92 +63,48 @@ async fn get_bdays(handler: &Handler, guild_id: u64) -> anyhow::Result<Vec<Birth
     Ok(res)
 }
 
-#[derive(Command)]
-#[cmd(name = "bdays", desc = "List server birthdays")]
-pub struct GetBdays;
-
-pub const GetBdaysC: CommandConst<Handler> = CommandConst {
-    name: "bdays",
+pub const GET_BDAYS: CommandConst = CommandConst {
     description: "List server birthdays",
-    func: get_bdays_c,
+    ..command!(/bdays: get_bdays)
 };
 
-fn get_bdays_c<'a>(handler: &'a Handler, ctx: &'a Context, command: &'a CommandInteraction) -> BoxFuture<'a, anyhow::Result<CommandResponse>> {
-    async move {
-        let guild_id = command
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        let mut bdays = get_bdays(handler, guild_id).await?;
-        let today = Utc::now().date_naive();
-        let current_day = today.day() as u8;
-        let current_month = today.month() as u8;
-        bdays.sort_unstable_by_key(|Birthday { day, month, .. }| {
-            let mut month = *month;
-            if month < current_month || (month == current_month && *day < current_day) {
-                month += 12;
-            }
-            month as u64 * 31 + *day as u64
-        });
-        let res = bdays
-            .into_iter()
-            .map(|b| format!("`{:02}/{:02}` • <@{}>", b.day, b.month, b.user_id))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let header = if let Some(server) = command.guild_id.and_then(|g| g.name(&ctx.cache)) {
-            format!("Birthdays in {server}")
-        } else {
-            "Birthdays".to_string()
-        };
-        let embed = CreateEmbed::default()
-            .author(CreateEmbedAuthor::new(header))
-            .description(res);
-        CommandResponse::public(embed)
-    }.boxed()
+async fn get_bdays(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let guild_id = command
+        .guild_id
+        .ok_or_else(|| anyhow!("Must be run in a guild"))?
+        .get();
+    let mut bdays = get_guild_bdays(handler, guild_id).await?;
+    let today = Utc::now().date_naive();
+    let current_day = today.day() as u8;
+    let current_month = today.month() as u8;
+    bdays.sort_unstable_by_key(|Birthday { day, month, .. }| {
+        let mut month = *month;
+        if month < current_month || (month == current_month && *day < current_day) {
+            month += 12;
+        }
+        month as u64 * 31 + *day as u64
+    });
+    let res = bdays
+        .into_iter()
+        .map(|b| format!("`{:02}/{:02}` • <@{}>", b.day, b.month, b.user_id))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let header = if let Some(server) = command.guild_id.and_then(|g| g.name(&ctx.cache)) {
+        format!("Birthdays in {server}")
+    } else {
+        "Birthdays".to_string()
+    };
+    let embed = CreateEmbed::default()
+        .author(CreateEmbedAuthor::new(header))
+        .description(res);
+    CommandResponse::public(embed)
 }
 
-#[async_trait]
-impl BotCommand for GetBdays {
-    type Data = Handler;
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        opts: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let guild_id = opts
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        let mut bdays = get_bdays(handler, guild_id).await?;
-        let today = Utc::now().date_naive();
-        let current_day = today.day() as u8;
-        let current_month = today.month() as u8;
-        bdays.sort_unstable_by_key(|Birthday { day, month, .. }| {
-            let mut month = *month;
-            if month < current_month || (month == current_month && *day < current_day) {
-                month += 12;
-            }
-            month as u64 * 31 + *day as u64
-        });
-        let res = bdays
-            .into_iter()
-            .map(|b| format!("`{:02}/{:02}` • <@{}>", b.day, b.month, b.user_id))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let header = if let Some(server) = opts.guild_id.and_then(|g| g.name(&ctx.cache)) {
-            format!("Birthdays in {server}")
-        } else {
-            "Birthdays".to_string()
-        };
-        let embed = CreateEmbed::default()
-            .author(CreateEmbedAuthor::new(header))
-            .description(res);
-        CommandResponse::public(embed)
-    }
-}
-
-args!(SET_BDAY =
+args!(SET_BDAY_ARGS =
     "Day"
     day: i64,
     "Month"
@@ -160,74 +113,61 @@ args!(SET_BDAY =
     year: Option<i64>,
 );
 
-#[derive(Command)]
-#[cmd(name = "bday", desc = "Set your birthday")]
-pub struct SetBday {
-    #[cmd(desc = "Day")]
-    day: i64,
-    #[cmd(desc = "Month")]
-    month: i64,
-    #[cmd(desc = "Year")]
-    year: Option<i64>,
+fn set_bday_options(
+    name: &str,
+    mut opt: CreateCommandOption<'static>,
+) -> CreateCommandOption<'static> {
+    match name {
+        "day" => {
+            opt = opt.min_int_value(1).max_int_value(31);
+        }
+        "month" => {
+            const MONTHS: [&str; 12] = [
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+            ];
+            opt = MONTHS.iter().enumerate().fold(opt, |opt, (n, &month)| {
+                opt.add_int_choice(month, n as i64 + 1)
+            });
+        }
+        _ => {}
+    }
+    opt
 }
 
-#[async_trait]
-impl BotCommand for SetBday {
-    type Data = Handler;
-    async fn run(
-        self,
-        handler: &Handler,
-        _ctx: &Context,
-        opts: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let user_id = opts.user.id.get();
-        let guild_id = opts
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        add_birthday(
-            handler,
-            guild_id,
-            user_id,
-            self.day as u8,
-            self.month as u8,
-            self.year.map(|y| y as u16),
-        )
-        .await?;
-        CommandResponse::private("Birthday set!")
-    }
+pub const SET_BDAY: CommandConst = CommandConst {
+    description: "Set your birthday",
+    ..command!(/bday SET_BDAY_ARGS(set_bday_options): set_bday)
+};
 
-    fn setup_options(
-        opt_name: &'static str,
-        mut opt: CreateCommandOption<'static>,
-    ) -> CreateCommandOption<'static> {
-        match opt_name {
-            "day" => {
-                opt = opt.min_int_value(1).max_int_value(31);
-            }
-            "month" => {
-                const MONTHS: [&str; 12] = [
-                    "January",
-                    "February",
-                    "March",
-                    "April",
-                    "May",
-                    "June",
-                    "July",
-                    "August",
-                    "September",
-                    "October",
-                    "November",
-                    "December",
-                ];
-                opt = MONTHS.iter().enumerate().fold(opt, |opt, (n, &month)| {
-                    opt.add_int_choice(month, n as i64 + 1)
-                });
-            }
-            _ => {}
-        }
-        opt
-    }
+async fn set_bday(
+    handler: &Handler,
+    _ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let (day, month, year) = SET_BDAY_ARGS.parse(&command.data).unwrap();
+    let user_id = command.user.id.get();
+    let guild_id = command.guild_id()?.get();
+    add_birthday(
+        handler,
+        guild_id,
+        user_id,
+        day as u8,
+        month as u8,
+        year.map(|y| y as u16),
+    )
+    .await?;
+    CommandResponse::private("Birthday set!")
 }
 
 async fn wish_bday(
@@ -321,9 +261,14 @@ impl Module for Bdays {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _: &mut CompletionStore) {
-        store.register::<GetBdays>();
-        store.register::<SetBday>();
+    fn register_commands(
+        &self,
+        store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
+        _: &mut CompletionStore,
+    ) {
+        store.register(GET_BDAYS);
+        store.register(SET_BDAY);
     }
 }
 

@@ -23,8 +23,7 @@ use crate::{
     modules::{AlbumLookup, SpotifyOAuth, google_apis::sheets::ValueRange},
     prelude::*,
 };
-use serenity_command::{BotCommand, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{ArgList, CommandResponse, args, command};
 
 #[derive(Clone, Debug)]
 pub struct PlaylistPick {
@@ -167,7 +166,7 @@ async fn resolve_pick(
     .map_err(|e| (pick, e))
 }
 
-async fn build_playlist<'a, 'b: 'a>(
+async fn do_build_playlist<'a, 'b: 'a>(
     handler: &'a Handler,
     guild_id: GuildId,
     user_id: &'b str,
@@ -332,7 +331,7 @@ async fn build_playlist_from_picks(
         .ok_or_else(|| anyhow!("No Spotify user ID configured for this server."))?;
     let edition = edition + if increment_edition { 1 } else { 0 };
     let (playlist, valid, invalid) =
-        build_playlist(handler, guild_id, &user_id, &picks, playlist_id, edition).await?;
+        do_build_playlist(handler, guild_id, &user_id, &picks, playlist_id, edition).await?;
     let nvalid = valid.len();
     let variables = Variables {
         last_row: current_row,
@@ -427,47 +426,42 @@ async fn build_playlist_from_picks(
     Ok(resp)
 }
 
-#[derive(Command)]
-#[cmd(
-    name = "build_playlist",
-    desc = "Build the server playlist from user submissions"
-)]
-pub struct BuildPlaylist {
+args!(BUILD_PLAYLIST_ARGS =
     reuse: Option<bool>,
-}
+);
 
-#[async_trait]
-impl BotCommand for BuildPlaylist {
-    type Data = Handler;
-    const PERMISSIONS: Permissions = Permissions::MANAGE_EVENTS;
-    const GUILD_COMMAND: bool = true;
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        interaction
-            .create_response(
-                &ctx.http,
-                CreateInteractionResponse::Defer(Default::default()),
-            )
-            .await?;
-        let guild_id = interaction.guild_id()?;
-        let res =
-            build_playlist_from_picks(handler, ctx, guild_id, !self.reuse.unwrap_or(false)).await;
-        let resp = match res {
-            Ok(resp) => resp,
-            Err(e) => {
-                eprintln!("{e:?}");
-                e.to_string()
-            }
-        };
-        interaction
-            .edit_response(&ctx.http, EditInteractionResponse::new().content(&resp))
-            .await?;
-        Ok(CommandResponse::None)
-    }
+const BUILD_PLAYLIST: CommandConst = CommandConst {
+    description: "Build the server playlist from user submissions",
+    permissions: Permissions::MANAGE_EVENTS,
+    is_guild: true,
+    ..command!(/build_playlist BUILD_PLAYLIST_ARGS: build_playlist)
+};
+
+async fn build_playlist(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    command
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(Default::default()),
+        )
+        .await?;
+    let guild_id = command.guild_id()?;
+    let (reuse,) = BUILD_PLAYLIST_ARGS.parse(&command.data).unwrap();
+    let res = build_playlist_from_picks(handler, ctx, guild_id, !reuse.unwrap_or(false)).await;
+    let resp = match res {
+        Ok(resp) => resp,
+        Err(e) => {
+            eprintln!("{e:?}");
+            e.to_string()
+        }
+    };
+    command
+        .edit_response(&ctx.http, EditInteractionResponse::new().content(&resp))
+        .await?;
+    Ok(CommandResponse::None)
 }
 
 pub struct PlaylistBuilder {}
@@ -485,7 +479,7 @@ impl Module for PlaylistBuilder {
         _modal_store: &mut ModalCommandStore,
         _completion_handlers: &mut CompletionStore,
     ) {
-        store.register::<BuildPlaylist>();
+        store.register(BUILD_PLAYLIST);
         // store.register::<GetMySubmissions>();
     }
 }

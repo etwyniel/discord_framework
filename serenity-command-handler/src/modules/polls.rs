@@ -14,8 +14,7 @@ use serenity::model::id::{GenericChannelId, MessageId};
 use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::{Message, Reaction, ReactionType, UserId};
 use serenity::{async_trait, prelude::Context};
-use serenity_command::{BotCommand, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{ArgList, CommandResponse, args, command};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::time::timeout;
@@ -64,14 +63,53 @@ struct PollHandle {
 
 pub type PendingPolls = VecDeque<PendingPoll>;
 
-#[derive(Command, Debug)]
-#[cmd(name = "ready_poll", desc = "Poll to start a listening party")]
-pub struct ReadyPoll {
-    #[cmd(desc = "Count emote")]
-    pub count_emote: Option<String>,
-    #[cmd(desc = "Emote Go")]
-    pub go_emote: Option<String>,
+args!(READY_POLL_ARSG =
+    "Count emote"
+    count_emote: Option<String>,
+    "Go emote"
+    go_emote: Option<String>,
+);
+
+const READY_POLL: CommandConst = CommandConst {
+    description:  "Poll to start a listening party",
+    ..command!(/ready_poll READY_POLL_ARSG: ready_poll)
+};
+
+struct ReadyPoll{
+    count_emote: Option<String>,
+    go_emote: Option<String>,
 }
+
+async fn ready_poll(
+        handler: &Handler,
+        ctx: &Context,
+        command: &CommandInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+    let (count_emote, go_emote) = READY_POLL_ARSG.parse(&command.data).unwrap();
+    let params = ReadyPoll{
+        count_emote, go_emote,
+    };
+        // create ready poll message
+        let resp = match params.create_poll(handler, ctx, command).await {
+            Err(e) => {
+                dbg!(&e);
+                Some(e.to_string())
+            }
+            _ => None,
+        };
+        // in case creating the poll failed, try to edit the interaction response with an error message
+        if let Some(resp) = resp {
+            command
+                .edit_response(
+                    &ctx.http,
+                    EditInteractionResponse::new()
+                        .content(resp)
+                        .allowed_mentions(CreateAllowedMentions::new().empty_users()),
+                )
+                .await?;
+        }
+        Ok(CommandResponse::None)
+    }
 
 async fn create_poll(
     poll_type: PollType,
@@ -169,10 +207,17 @@ impl ReadyPoll {
     }
 }
 
-#[derive(Command, Debug)]
-#[cmd(name = "poll", desc = "Ask a question")]
+args!(POLL_ARGS =
+    question: String,
+);
+
+const POLL: CommandConst = CommandConst {
+    description: "Ask a question",
+    ..command!(/poll POLL_ARGS: poll)
+};
+
+#[derive(Debug)]
 pub struct Poll {
-    #[cmd(desc = "Question")]
     pub question: String,
 }
 
@@ -195,18 +240,15 @@ impl Poll {
     }
 }
 
-#[async_trait]
-impl BotCommand for ReadyPoll {
-    type Data = Handler;
-
-    async fn run(
-        self,
+async fn poll(
         handler: &Handler,
         ctx: &Context,
-        interaction: &CommandInteraction,
+        command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
+    let (question,) = POLL_ARGS.parse(&command.data).unwrap();
+    let params = Poll{question};
         // create ready poll message
-        let resp = match self.create_poll(handler, ctx, interaction).await {
+        let resp = match params.create_poll(handler, ctx, command).await {
             Err(e) => {
                 dbg!(&e);
                 Some(e.to_string())
@@ -215,7 +257,7 @@ impl BotCommand for ReadyPoll {
         };
         // in case creating the poll failed, try to edit the interaction response with an error message
         if let Some(resp) = resp {
-            interaction
+            command
                 .edit_response(
                     &ctx.http,
                     EditInteractionResponse::new()
@@ -225,40 +267,6 @@ impl BotCommand for ReadyPoll {
                 .await?;
         }
         Ok(CommandResponse::None)
-    }
-}
-
-#[async_trait]
-impl BotCommand for Poll {
-    type Data = Handler;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        // create ready poll message
-        let resp = match self.create_poll(handler, ctx, interaction).await {
-            Err(e) => {
-                dbg!(&e);
-                Some(e.to_string())
-            }
-            _ => None,
-        };
-        // in case creating the poll failed, try to edit the interaction response with an error message
-        if let Some(resp) = resp {
-            interaction
-                .edit_response(
-                    &ctx.http,
-                    EditInteractionResponse::new()
-                        .content(resp)
-                        .allowed_mentions(CreateAllowedMentions::new().empty_users()),
-                )
-                .await?;
-        }
-        Ok(CommandResponse::None)
-    }
 }
 
 fn format_user_list(buf: &mut String, users: &[UserId]) {
@@ -553,8 +561,8 @@ impl Default for ModPoll {
 #[async_trait]
 impl Module for ModPoll {
     fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _completions: &mut CompletionStore) {
-        store.register::<ReadyPoll>();
-        store.register::<Poll>();
+        store.register(READY_POLL);
+        store.register(POLL);
     }
 }
 

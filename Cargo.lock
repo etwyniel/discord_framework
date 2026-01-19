@@ -3040,16 +3040,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serenity-command-derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "serenity",
- "syn",
-]
-
-[[package]]
 name = "serenity-command-handler"
 version = "0.1.0"
 dependencies = [
@@ -3077,7 +3067,6 @@ dependencies = [
  "serde_urlencoded",
  "serenity",
  "serenity-command",
- "serenity-command-derive",
  "sha2",
  "tokio",
  "tokio-stream",

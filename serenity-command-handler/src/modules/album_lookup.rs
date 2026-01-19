@@ -1,8 +1,7 @@
 use serenity::all::CreateCommandOption;
 use serenity::model::prelude::CommandInteraction;
 use serenity::{async_trait, prelude::Context};
-use serenity_command::{BotCommand, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{ArgList, CommandResponse, args, command};
 
 use std::fmt::Write;
 use std::sync::Arc;
@@ -13,37 +12,50 @@ use crate::prelude::*;
 
 use anyhow::Context as _;
 
-#[derive(Command)]
-#[cmd(name = "album", desc = "lookup an album")]
-struct LookupAlbum {
-    #[cmd(desc = "The album you are looking for (e.g. band - album)")]
+args!(LOOKUP_ALBUM_ARGS =
+     "The album you are looking for (e.g. band - album)"
     album: String,
-    #[cmd(desc = "Where to look for album info (defaults to spotify)")]
+     "Where to look for album info (defaults to spotify)"
     provider: Option<String>,
-}
+);
 
-#[async_trait]
-impl BotCommand for LookupAlbum {
-    type Data = Handler;
-    async fn run(
-        self,
+    fn set_lookup_options(
+        name: &str,
+        opt: CreateCommandOption<'static>,
+    ) -> CreateCommandOption<'static> {
+        if name == "provider" {
+            opt.add_string_choice("spotify", "spotify")
+                .add_string_choice("bandcamp", "bandcamp")
+                .add_string_choice("tidal", "tidal")
+        } else {
+            opt
+        }
+    }
+
+const LOOKUP_ALBUM: CommandConst = CommandConst {
+    description:  "Look up an album",
+    ..command!(/album LOOKUP_ALBUM_ARGS(set_lookup_options): lookup_album)
+};
+
+    async fn lookup_album(
         handler: &Handler,
         _ctx: &Context,
-        _opts: &CommandInteraction,
+        command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
+        let (album, provider) = LOOKUP_ALBUM_ARGS.parse(&command.data).unwrap();
         let album_lookup = handler.module::<AlbumLookup>()?;
-        let mut info = if self.album.starts_with("https://") {
+        let mut info = if album.starts_with("https://") {
             // command called with a URL, ignore provider param, find appropriate
             // album provider and fetch metadata
             let provider = album_lookup
                 .providers
                 .iter()
-                .find(|p| p.url_matches(&self.album))
+                .find(|p| p.url_matches(&album))
                 .context("Unable to fetch metadata for this type of link")?;
-            provider.get_from_url(&self.album).await?
+            provider.get_from_url(&album).await?
         } else {
-            let provider = album_lookup.get_provider(self.provider.as_deref());
-            provider.query_album(&self.album).await?
+            let provider = album_lookup.get_provider(provider.as_deref());
+            provider.query_album(&album).await?
         };
         let mut contents = info.as_linked_header(None);
         _ = writeln!(&mut contents);
@@ -94,20 +106,6 @@ impl BotCommand for LookupAlbum {
             serenity_command::ResponseType::WithAttachments(contents, Vec::new(), attachments),
         ))
     }
-
-    fn setup_options(
-        opt_name: &str,
-        opt: CreateCommandOption<'static>,
-    ) -> CreateCommandOption<'static> {
-        if opt_name == "provider" {
-            opt.add_string_choice("spotify", "spotify")
-                .add_string_choice("bandcamp", "bandcamp")
-                .add_string_choice("tidal", "tidal")
-        } else {
-            opt
-        }
-    }
-}
 
 pub struct AlbumLookup {
     providers: Vec<Arc<dyn AlbumProvider>>,
@@ -166,7 +164,7 @@ impl AlbumLookup {
 #[async_trait]
 impl Module for AlbumLookup {
     fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _completions: &mut CompletionStore) {
-        store.register::<LookupAlbum>();
+        store.register(LOOKUP_ALBUM);
     }
 }
 

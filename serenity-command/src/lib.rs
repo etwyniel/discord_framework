@@ -18,9 +18,7 @@ pub use command_data::*;
 
 pub type CommandKey<'a> = (&'a str, CommandType);
 
-pub struct CommandStore<'a, T>(
-    pub HashMap<CommandKey<'a>, Box<dyn CommandRunner<T> + Send + Sync>>,
-);
+pub struct CommandStore<'a, T>(pub HashMap<CommandKey<'a>, CommandConst<T>>);
 
 impl<T> Default for CommandStore<'_, T> {
     fn default() -> Self {
@@ -29,9 +27,9 @@ impl<T> Default for CommandStore<'_, T> {
 }
 
 impl<T> CommandStore<'_, T> {
-    pub fn register<B: CommandBuilder<'static, Data = T>>(&mut self) {
-        let runner = B::runner();
-        self.0.insert(runner.name(), runner);
+    pub fn register(&mut self, command: CommandConst<T>) {
+        let key = (command.name, command.ty);
+        self.0.insert(key, command);
     }
 }
 
@@ -122,12 +120,91 @@ impl<T> ModalCommandStore<'_, T> {
     }
 }
 
+// pub type CommandFunc<'a, T, F> = fn(&'a T, &'a Context, &'a CommandInteraction) -> F;
+pub type CommandFunc<T> = for<'a> fn(
+    &'a T,
+    &'a Context,
+    &'a CommandInteraction,
+) -> BoxFuture<'a, anyhow::Result<CommandResponse>>;
+
 pub struct CommandConst<T> {
     pub name: &'static str,
     pub description: &'static str,
-    pub func: for<'a> fn(
-        &'a T,
-        &'a Context,
-        &'a CommandInteraction,
-    ) -> BoxFuture<'a, anyhow::Result<CommandResponse>>,
+    // pub run: Box<
+    //     dyn for<'a> Fn(
+    //         &'a T,
+    //         &'a Context,
+    //         &'a CommandInteraction,
+    //     ) -> BoxFuture<'a, anyhow::Result<CommandResponse>>,
+    // >,
+    pub run: CommandFunc<T>,
+    pub setup_options: fn(&str, CreateCommandOption<'static>) -> CreateCommandOption<'static>,
+    pub register_options: fn(CreateCommand<'static>) -> CreateCommand<'static>,
+    pub ty: CommandType,
+    pub is_guild: bool,
+    pub is_management: bool,
+    pub permissions: Permissions,
+}
+
+// pub const fn command_default<T, F>(name: &'static str, run: CommandFunc<T, F>) -> CommandConst<T>
+// where
+//     F: Future<Output = anyhow::Result<CommandResponse>>,
+// {
+//     CommandConst {
+//         name,
+//         description: "",
+//         run: Box::new(|h, c, cmd| async move { run(h, c, cmd).await }.boxed()),
+//         setup_options: |_, o| o,
+//         register_options: |c| c,
+//         ty: CommandType::ChatInput,
+//         is_guild: false,
+//         is_management: false,
+//     }
+// }
+
+pub const fn command_default<T>(name: &'static str, run: CommandFunc<T>) -> CommandConst<T> {
+    CommandConst {
+        name,
+        description: "",
+        run,
+        setup_options: |_, o| o,
+        register_options: |c| c,
+        ty: CommandType::ChatInput,
+        is_guild: false,
+        is_management: false,
+        permissions: Permissions::empty(),
+    }
+}
+
+#[macro_export]
+macro_rules! command {
+    (/$name:ident: $f:expr) => {{
+        use serenity::futures::FutureExt;
+        let f: $crate::CommandFunc<_> = |h, c, cmd| async move { ($f)(h, c, cmd).await }.boxed();
+        $crate::command_default(stringify!($name), f)
+    }};
+    (/$name:ident $args:ident: $f:expr) => {{
+        use serenity::futures::FutureExt;
+        let f: $crate::CommandFunc<_> = |h, c, cmd| async move { ($f)(h, c, cmd).await }.boxed();
+        $crate::CommandConst {
+            register_options: |cmd| $args.add_options(cmd),
+            ..$crate::command_default(stringify!($name), f)
+        }
+    }};
+    (/$name:ident $args:ident($extra:ident): $f:expr) => {{
+        use serenity::futures::FutureExt;
+        let f: $crate::CommandFunc<_> = |h, c, cmd| async move { ($f)(h, c, cmd).await }.boxed();
+        $crate::CommandConst {
+            register_options: |cmd| $args.add_options_with(cmd, $extra),
+            ..$crate::command_default(stringify!($name), f)
+        }
+    }};
+    (/$name:ident(Message): $f:expr) => {{
+        use serenity::futures::FutureExt;
+        let f: $crate::CommandFunc<_> = |h, c, cmd| async move { ($f)(h, c, cmd).await }.boxed();
+        $crate::CommandConst {
+            ty: serenity::model::application::CommandType::Message,
+            ..$crate::command_default(stringify!($name), f)
+        }
+    }};
 }

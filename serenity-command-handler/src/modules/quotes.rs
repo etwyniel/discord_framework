@@ -37,8 +37,7 @@ use serenity::{
     prelude::{Context, Mutex},
 };
 
-use serenity_command::{BotCommand, CommandKey, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{ArgList, CommandKey, CommandResponse, args, command};
 use tokio::time::interval;
 
 use crate::{RegisterableModule, command_context::get_str_opt_ac, db::Db, prelude::*};
@@ -305,13 +304,13 @@ pub async fn quotes_markov_chain(
     handler: &Handler,
     guild_id: u64,
     user: Option<u64>,
-    order: Option<usize>,
+    order: Option<i64>,
 ) -> anyhow::Result<(markov::Chain<CaseInsensitiveString<'_>>, HashSet<u64>)> {
     let db = handler.db.lock().await;
     let mut stmt = db.conn().prepare(
         "SELECT contents FROM quote WHERE guild_id = ?1 AND (?2 IS NULL or author_id = ?2)",
     )?;
-    let mut chain = markov::Chain::of_order(order.unwrap_or(1));
+    let mut chain = markov::Chain::of_order(order.unwrap_or(1) as usize);
     let mut quotes = HashSet::new();
     stmt.query(params![guild_id, user])?
         .map(|row| crate::db::column_as_string(row.get_ref(0)?))
@@ -361,43 +360,50 @@ pub async fn list_quotes(
     Ok(res)
 }
 
-#[derive(Command)]
-#[cmd(name = "quote", desc = "Retrieve a quote")]
+args!(QUOTE_ARGS =
+    "Number the quote was saved as (optional)"
+    number[autocomplete]: Option<i64>,
+     "Get a random quote from a specific user"
+    user: Option<UserId>,
+     "Hide the username for even more confusion"
+    hide_author: Option<bool>,
+);
+
+const GET_QUOTE: CommandConst = CommandConst {
+    description: "Retrieve a quote",
+    ..command!(/quote QUOTE_ARGS(set_quote_options): get_quote)
+};
+
+fn set_quote_options(
+    name: &str,
+    opt: CreateCommandOption<'static>,
+) -> CreateCommandOption<'static> {
+    if name == "number" {
+        opt.min_int_value(1)
+    } else {
+        opt
+    }
+}
+
 pub struct GetQuote {
-    #[cmd(desc = "Number the quote was saved as (optional)", autocomplete)]
     pub number: Option<i64>,
-    #[cmd(desc = "Get a random quote from a specific user")]
     pub user: Option<UserId>,
-    #[cmd(desc = "Hide the username for even more confusion")]
     pub hide_author: Option<bool>,
 }
 
-#[async_trait]
-impl BotCommand for GetQuote {
-    type Data = Handler;
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        opts: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let guild_id = opts
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        self.get_quote(handler, ctx, guild_id).await
-    }
-
-    fn setup_options(
-        opt_name: &'static str,
-        opt: CreateCommandOption<'static>,
-    ) -> CreateCommandOption<'static> {
-        if opt_name == "number" {
-            opt.min_int_value(1)
-        } else {
-            opt
-        }
-    }
+async fn get_quote(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let (number, user, hide_author) = QUOTE_ARGS.parse(&command.data).unwrap();
+    let guild_id = command.guild_id()?.get();
+    let params = GetQuote {
+        number,
+        user,
+        hide_author,
+    };
+    params.get_quote(handler, ctx, guild_id).await
 }
 
 struct QuoteEmbedElements {
@@ -519,103 +525,94 @@ impl GetQuote {
     }
 }
 
-#[derive(Command)]
-#[cmd(name = "quote", message)]
-pub struct SaveQuote(Message);
+const SAVE_QUOTE: CommandConst = CommandConst {
+    description: "Save a message as a quote",
+    ..command!(/quote(Message): save_quote)
+};
 
-#[async_trait]
-impl BotCommand for SaveQuote {
-    type Data = Handler;
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        opts: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let guild_id = opts
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        // messages received through command interactions are partial
-        // retrieve full message to have referenced_message
-        let message = ctx.http.get_message(self.0.channel_id, self.0.id).await?;
-        let quote_number = add_quote(handler, ctx, guild_id, &message).await?;
-        let link = self
-            .0
-            .id
-            .link(self.0.channel_id, Some(GuildId::new(guild_id)));
-        let resp_text = match quote_number {
-            Some(n) => format!("Quote saved as #{n}: {link}"),
-            None => "Quote already added".to_string(),
-        };
-        CommandResponse::public(resp_text)
-    }
+async fn save_quote(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let guild_id = command.guild_id()?.get();
+    let msg = command.data.resolved.messages.iter().next().unwrap();
+    // messages received through command interactions are partial
+    // retrieve full message to have referenced_message
+    let message = ctx.http.get_message(msg.channel_id, msg.id).await?;
+    let quote_number = add_quote(handler, ctx, guild_id, &message).await?;
+    let link = msg.id.link(msg.channel_id, Some(GuildId::new(guild_id)));
+    let resp_text = match quote_number {
+        Some(n) => format!("Quote saved as #{n}: {link}"),
+        None => "Quote already added".to_string(),
+    };
+    CommandResponse::public(resp_text)
 }
 
-#[derive(Command)]
-#[cmd(name = "fake_quote", desc = "Get a procedurally generated quote")]
-pub struct FakeQuote {
+args!(FAKE_QUOTE_ARGS =
     user: Option<UserId>,
     start: Option<String>,
-    order: Option<usize>,
+    order: Option<i64>,
+);
+
+const FAKE_QUOTE: CommandConst = CommandConst {
+    description: "Get a procedurally generated quote",
+    ..command!(/fake_quote FAKE_QUOTE_ARGS(set_fake_quote_options): get_fake_quote)
+};
+
+fn set_fake_quote_options(
+    name: &str,
+    opt: CreateCommandOption<'static>,
+) -> CreateCommandOption<'static> {
+    if name == "order" {
+        opt.min_int_value(1)
+            .max_int_value(4)
+            .description("Markov chain order. Higher = closer to real quotes but more coherent")
+    } else {
+        opt
+    }
 }
 
-#[async_trait]
-impl BotCommand for FakeQuote {
-    type Data = Handler;
-    async fn run(
-        self,
-        handler: &Handler,
-        _ctx: &Context,
-        opts: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let (chain, quotes) = quotes_markov_chain(
-            handler,
-            opts.guild_id
-                .ok_or_else(|| anyhow!("must be run in a guild"))?
-                .get(),
-            self.user.map(|u| u.get()),
-            self.order,
-        )
-        .await?;
-        let mut resp = String::new();
-        for _ in 0..100 {
-            resp = if let Some(start) = &self.start {
-                chain.generate_from_token(CaseInsensitiveString::new(start))
-                // chain.generate_str_from_token(&start)
-            } else {
-                chain.generate()
-            }
-            .into_iter()
-            .map(|CaseInsensitiveString(s, _)| s)
-            .join(" ");
-            if !(resp.trim().is_empty()
-                || quotes.contains(&CaseInsensitiveString::new(resp.as_str()).1))
-            {
-                break;
-            }
-            eprintln!("generated a real quote, trying again");
-        }
-        if resp.is_empty() {
-            resp = "Failed to generate quote".to_string();
-        } else if let Some(id) = self.user.map(UserId::get) {
-            write!(&mut resp, "\n - <@{id}>").unwrap();
-        }
-        CommandResponse::public(resp)
-    }
-
-    fn setup_options(
-        opt_name: &'static str,
-        opt: CreateCommandOption<'static>,
-    ) -> CreateCommandOption<'static> {
-        if opt_name == "order" {
-            opt.min_int_value(1)
-                .max_int_value(4)
-                .description("Markov chain order. Higher = closer to real quotes but more coherent")
+async fn get_fake_quote(
+    handler: &Handler,
+    _ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let (user, start, order) = FAKE_QUOTE_ARGS.parse(&command.data).unwrap();
+    let (chain, quotes) = quotes_markov_chain(
+        handler,
+        command
+            .guild_id
+            .ok_or_else(|| anyhow!("must be run in a guild"))?
+            .get(),
+        user.map(|u| u.get()),
+        order,
+    )
+    .await?;
+    let mut resp = String::new();
+    for _ in 0..100 {
+        resp = if let Some(start) = &start {
+            chain.generate_from_token(CaseInsensitiveString::new(start))
+            // chain.generate_str_from_token(&start)
         } else {
-            opt
+            chain.generate()
         }
+        .into_iter()
+        .map(|CaseInsensitiveString(s, _)| s)
+        .join(" ");
+        if !(resp.trim().is_empty()
+            || quotes.contains(&CaseInsensitiveString::new(resp.as_str()).1))
+        {
+            break;
+        }
+        eprintln!("generated a real quote, trying again");
     }
+    if resp.is_empty() {
+        resp = "Failed to generate quote".to_string();
+    } else if let Some(id) = user.map(UserId::get) {
+        write!(&mut resp, "\n - <@{id}>").unwrap();
+    }
+    CommandResponse::public(resp)
 }
 
 pub async fn send_qotd(
@@ -794,10 +791,15 @@ impl Module for Quotes {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
-        store.register::<GetQuote>();
-        store.register::<SaveQuote>();
-        store.register::<FakeQuote>();
+    fn register_commands(
+        &self,
+        store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
+        completions: &mut CompletionStore,
+    ) {
+        store.register(GET_QUOTE);
+        store.register(SAVE_QUOTE);
+        store.register(FAKE_QUOTE);
         completions.push(Quotes::complete_quotes);
     }
 }

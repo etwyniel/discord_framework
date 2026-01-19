@@ -30,8 +30,7 @@ use serenity::{
     },
 };
 use serenity::{http::Http, model::prelude::ReactionType, prelude::*};
-use serenity_command::{BotCommand, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{CommandResponse, command};
 
 use crate::album::{Album, AlbumProvider};
 
@@ -342,63 +341,82 @@ impl Spotify<AuthCodeSpotify> {
     }
 }
 
-#[derive(Command)]
-#[cmd(name = "spotify_authenticate", desc = "Authenticate Spotify user")]
-pub struct SpotifyAuthenticate;
+pub const SPOTIFY_AUTHENTICATE: CommandConst = CommandConst {
+    description: "Authenticate Spotify user",
+    ..command!(/spotify_authenticate: spotify_authenticate)
+};
 
-#[async_trait]
-impl BotCommand for SpotifyAuthenticate {
-    type Data = Handler;
-
-    async fn run(
-        self,
-        _: &Handler,
-        ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let scopes = scopes!(
-            "playlist-modify-public",
-            "playlist-read-private",
-            "playlist-read-collaborative",
-            "user-library-read",
-            "user-read-private",
-            "playlist-modify-private"
-        );
-        let creds = Credentials::from_env().ok_or_else(|| anyhow!("No spotify credentials"))?;
-        let oauth =
-            rspotify::OAuth::from_env(scopes).ok_or_else(|| anyhow!("No oauth information"))?;
-        let mut client = AuthCodeSpotify::new(creds, oauth);
-        client.config.token_cached = true;
-        client.config.cache_path = CACHE_PATH.into();
-        let url = client
-            .get_authorize_url(false)
-            .context("failed to generate authorization url")?;
-        interaction
-            .create_response(
-                &ctx.http,
-                CreateInteractionResponse::Message(
-                    CreateInteractionResponseMessage::new()
-                        .ephemeral(true)
-                        .content(format!("authentication URL: {url}"))
-                        .components(vec![CreateComponent::ActionRow(CreateActionRow::Buttons(
-                            vec![CreateButton::new(INTERACTION_AUTH_PROMPT).label("Submit token")]
-                                .into(),
-                        ))]),
-                ),
-            )
-            .await?;
-        Ok(CommandResponse::None)
-    }
+async fn spotify_authenticate(
+    _: &Handler,
+    ctx: &Context,
+    interaction: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let scopes = scopes!(
+        "playlist-modify-public",
+        "playlist-read-private",
+        "playlist-read-collaborative",
+        "user-library-read",
+        "user-read-private",
+        "playlist-modify-private"
+    );
+    let creds = Credentials::from_env().ok_or_else(|| anyhow!("No spotify credentials"))?;
+    let oauth = rspotify::OAuth::from_env(scopes).ok_or_else(|| anyhow!("No oauth information"))?;
+    let mut client = AuthCodeSpotify::new(creds, oauth);
+    client.config.token_cached = true;
+    client.config.cache_path = CACHE_PATH.into();
+    let url = client
+        .get_authorize_url(false)
+        .context("failed to generate authorization url")?;
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content(format!("authentication URL: {url}"))
+                    .components(vec![CreateComponent::ActionRow(CreateActionRow::Buttons(
+                        vec![CreateButton::new(INTERACTION_AUTH_PROMPT).label("Submit token")]
+                            .into(),
+                    ))]),
+            ),
+        )
+        .await?;
+    Ok(CommandResponse::None)
 }
 
-#[derive(Command)]
-#[cmd(name = "unlink", message, desc = "Resolve a spotify.link URL")]
-pub struct Unlink(Message);
+pub const UNLINK: CommandConst = CommandConst {
+    description: "Resolve a spotify.link URL",
+    ..command!(/unlink(Message): unlink)
+};
+
+async fn unlink(
+    _: &Handler,
+    _: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let msg = command.data.resolved.messages.iter().next().unwrap();
+    let urls = resolve_spotify_links(&msg.content).await?;
+    if urls.is_empty() {
+        bail!("No shortened spotify links found in message");
+    }
+    let plural_s = if urls.len() > 1 { "s" } else { "" };
+    let mut resp = format!("Resolved spotify link{plural_s} from {}", msg.link());
+    urls.into_iter().for_each(|url| {
+        resp.push('\n');
+        resp.push_str(&url)
+    });
+    CommandResponse::public(resp)
+}
 
 #[async_trait]
 impl Module for Spotify<ClientCredsSpotify> {
-    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _: &mut CompletionStore) {
-        store.register::<Unlink>();
+    fn register_commands(
+        &self,
+        _store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
+        _: &mut CompletionStore,
+    ) {
+        // store.register::<Unlink>();
     }
 }
 
@@ -478,37 +496,18 @@ pub async fn handle_reaction(
 }
 
 #[async_trait]
-impl BotCommand for Unlink {
-    type Data = Handler;
-
-    async fn run(
-        self,
-        _: &Handler,
-        _: &Context,
-        _: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let urls = resolve_spotify_links(&self.0.content).await?;
-        if urls.is_empty() {
-            bail!("No shortened spotify links found in message");
-        }
-        let plural_s = if urls.len() > 1 { "s" } else { "" };
-        let mut resp = format!("Resolved spotify link{plural_s} from {}", self.0.link());
-        urls.into_iter().for_each(|url| {
-            resp.push('\n');
-            resp.push_str(&url)
-        });
-        CommandResponse::public(resp)
-    }
-}
-
-#[async_trait]
 impl Module for Spotify<AuthCodeSpotify> {
     async fn setup(&mut self, db: &mut crate::db::Db) -> anyhow::Result<()> {
         db.add_guild_field("spotify_user_id", "STRING")
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, _: &mut CompletionStore) {
-        store.register::<SpotifyAuthenticate>();
+    fn register_commands(
+        &self,
+        _store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
+        _: &mut CompletionStore,
+    ) {
+        // store.register(SPOTIFY_AUTHENTICATE);
     }
     //
     // async fn handle_component_interaction(

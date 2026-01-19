@@ -1,4 +1,4 @@
-use anyhow::{Context as _, anyhow, bail};
+use anyhow::{Context as _, anyhow};
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
 use serenity::all::{Channel, GenericChannelId, MessagePin};
@@ -13,8 +13,7 @@ use serenity::{
     },
     prelude::Context,
 };
-use serenity_command::{BotCommand, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{ArgList, CommandResponse, args, command};
 use std::fmt::Write;
 
 use crate::{RegisterableModule, prelude::*};
@@ -92,43 +91,38 @@ impl<'a> From<&'a Message> for SimpleMessage<'a> {
     }
 }
 
-#[derive(Command)]
-#[cmd(
-    name = "setpinboardwebhook",
-    desc = "Set (or unset) a webhook for the pinboard channel"
-)]
-pub struct SetPinboardWebhook {
-    #[cmd(desc = "The webhook URL for the pinboard channel (leave empty to remove)")]
+args!(SETPINBOARDWEBHOOK_ARGS =
+    "The webhook URL for the pinboard channel (leave empty to remove)"
     webhook: Option<String>,
-}
+);
 
-#[async_trait]
-impl BotCommand for SetPinboardWebhook {
-    type Data = Handler;
-    async fn run(
-        self,
+const SETPINBOARDWEBHOOK: CommandConst = CommandConst {
+    description:  "Set (or unset) a webhook for the pinboard channel",
+    permissions: Permissions::MANAGE_WEBHOOKS,
+    ..command!(/setpinboardwebhook SETPINBOARDWEBHOOK_ARGS: set_pinboard_webhook)
+};
+
+    async fn set_pinboard_webhook(
         handler: &Handler,
         _ctx: &Context,
-        opts: &CommandInteraction,
+        command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let guild_id = opts
+        let (webhook,) = SETPINBOARDWEBHOOK_ARGS.parse(&command.data).unwrap();
+        let guild_id = command
             .guild_id
             .ok_or_else(|| anyhow!("Must be run in a guild"))?
             .get();
         handler.db.lock().await.set_guild_field(
             guild_id,
             "pinboard_webhook",
-            self.webhook.as_deref(),
+            webhook.as_deref(),
         )?;
-        CommandResponse::private(if self.webhook.is_some() {
+        CommandResponse::private(if webhook.is_some() {
             "Pinboard webhook set"
         } else {
             "Pinboard webhook removed"
         })
     }
-
-    const PERMISSIONS: Permissions = Permissions::MANAGE_WEBHOOKS;
-}
 
 async fn load_allowed_channels(
     handler: &Handler,
@@ -324,83 +318,63 @@ impl Pinboard {
     }
 }
 
-#[derive(Command)]
-#[cmd(name = "register_channel_to_pinboard")]
-struct RegisterChannel;
+const REGISTER_CHANNEL: CommandConst = CommandConst {
+    description:  "Register_channel_to_pinboard",
+    permissions: Permissions::MANAGE_MESSAGES,
+    ..command!(/register_channel_to_pinboard: register_channel)
+};
 
-#[async_trait]
-impl BotCommand for RegisterChannel {
-    type Data = Handler;
-    const PERMISSIONS: Permissions = Permissions::MANAGE_MESSAGES;
-
-    async fn run(
-        self,
+    async fn register_channel(
         data: &Handler,
         _: &Context,
-        interaction: &CommandInteraction,
+        command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let Some(guild_id) = interaction.guild_id else {
-            bail!("Must be run in a guild")
-        };
+        let guild_id = command.guild_id()?;
         let db = data.db.lock().await;
         db.conn().execute(
             "INSERT INTO pinboard_allowed_channels (guild_id, channel_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
-            [guild_id.get(), interaction.channel_id.get()])?;
+            [guild_id.get(), command.channel_id.get()])?;
         CommandResponse::private(format!(
             "Registered <#{}> to pinboard",
-            interaction.channel_id.get()
+            command.channel_id.get()
         ))
     }
-}
 
-#[derive(Command)]
-#[cmd(name = "unregister_channel_from_pinboard")]
-struct UnregisterChannel;
+const UNREGISTER_CHANNEL: CommandConst = CommandConst {
+    description:  "Unregister_channel_from_pinboard",
+    permissions: Permissions::MANAGE_MESSAGES,
+     ..command!(/unregister_channel_from_pinboard: unregister_channel)
+    };
 
-#[async_trait]
-impl BotCommand for UnregisterChannel {
-    type Data = Handler;
-    const PERMISSIONS: Permissions = Permissions::MANAGE_MESSAGES;
-
-    async fn run(
-        self,
+    async fn unregister_channel(
         data: &Handler,
         _: &Context,
-        interaction: &CommandInteraction,
+        command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let Some(guild_id) = interaction.guild_id else {
-            bail!("Must be run in a guild")
-        };
+        let guild_id = command.guild_id()?;
         let db = data.db.lock().await;
         db.conn().execute(
             "DELETE FROM pinboard_allowed_channels WHERE guild_id = ?1 AND channel_id = ?2",
-            [guild_id.get(), interaction.channel_id.get()],
+            [guild_id.get(), command.channel_id.get()],
         )?;
         CommandResponse::private(format!(
             "Unregistered <#{}> from pinboard",
-            interaction.channel_id.get()
+            command.channel_id.get()
         ))
     }
-}
 
-#[derive(Command)]
-#[cmd(name = "list_pinboard_channels")]
-struct ListChannels;
+const LIST_CHANNELS: CommandConst = CommandConst {
+    description: "List_pinboard_channels",
+    permissions: Permissions::MANAGE_MESSAGES,
+    ..command!(/list_pinboard_channels: list_channels)
+};
 
-#[async_trait]
-impl BotCommand for ListChannels {
-    type Data = Handler;
-    const PERMISSIONS: Permissions = Permissions::MANAGE_MESSAGES;
-
-    async fn run(
-        self,
+    async fn list_channels(
         handler: &Handler,
         _: &Context,
-        interaction: &CommandInteraction,
+        command: &CommandInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let Some(guild_id) = interaction.guild_id else {
-            bail!("Must be run in a guild")
-        };
+        let guild_id = command.guild_id()?;
         let channels = load_allowed_channels(handler, guild_id).await?;
         let resp = match channels.as_slice() {
             [] => "No channels configured, pins from every channel will be sent to pinboard"
@@ -415,7 +389,6 @@ impl BotCommand for ListChannels {
         };
         CommandResponse::public(resp)
     }
-}
 
 #[async_trait]
 impl Module for Pinboard {
@@ -439,10 +412,10 @@ impl Module for Pinboard {
         _modal_store: &mut ModalCommandStore,
         _completion_handlers: &mut CompletionStore,
     ) {
-        store.register::<SetPinboardWebhook>();
-        store.register::<RegisterChannel>();
-        store.register::<UnregisterChannel>();
-        store.register::<ListChannels>();
+        store.register(SETPINBOARDWEBHOOK);
+        store.register(REGISTER_CHANNEL);
+        store.register(UNREGISTER_CHANNEL);
+        store.register(LIST_CHANNELS);
     }
 }
 

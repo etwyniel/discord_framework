@@ -35,6 +35,7 @@ use command_context::Responder;
 use crate::command_context::{get_select_values, get_text_input_value};
 use crate::modules::lp::Lp;
 
+pub type CommandConst = serenity_command::CommandConst<Handler>;
 pub type CommandStore = serenity_command::CommandStore<'static, Handler>;
 pub type ModalCommandStore = serenity_command::ModalCommandStore<'static, Handler>;
 
@@ -163,7 +164,7 @@ impl Handler {
         }
         let key = (name, cmd.data.kind);
         if let Some(runner) = self.commands.read().await.0.get(&key) {
-            runner.run(self, ctx, cmd).await
+            (runner.run)(self, ctx, cmd).await
         } else if let Some(h) = self.default_command_handler {
             return h(self, ctx, cmd).await;
         } else {
@@ -271,7 +272,11 @@ impl HandlerBuilder {
         self = M::add_dependencies(self).await?;
         let mut m = M::init(&self.modules).await?;
         m.setup(&mut self.db).await?;
-        m.register_commands(&mut self.commands, &mut self.modal_commands, &mut self.completion_handlers);
+        m.register_commands(
+            &mut self.commands,
+            &mut self.modal_commands,
+            &mut self.completion_handlers,
+        );
         let module: Arc<M> = m.into();
         Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
         self.modules.add(Arc::clone(&module));
@@ -285,7 +290,11 @@ impl HandlerBuilder {
         }
         self = M::add_dependencies(self).await?;
         m.setup(&mut self.db).await?;
-        m.register_commands(&mut self.commands, &mut self.modal_commands, &mut self.completion_handlers);
+        m.register_commands(
+            &mut self.commands,
+            &mut self.modal_commands,
+            &mut self.completion_handlers,
+        );
         let module: Arc<M> = m.into();
         Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
         self.modules.add(Arc::clone(&module));
@@ -375,6 +384,7 @@ impl<T: 'static + Send + Sync + Module> TypeMapKey for KeyWrapper<T> {
 
 pub mod prelude {
     pub use super::{
-        ModalCommandStore, CommandStore, CompletionStore, Handler, HandlerBuilder, InteractionExt, Module, ModuleMap, RegisterableModule
+        CommandConst, CommandStore, CompletionStore, Handler, HandlerBuilder, InteractionExt,
+        ModalCommandStore, Module, ModuleMap, RegisterableModule,
     };
 }

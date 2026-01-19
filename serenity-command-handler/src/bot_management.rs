@@ -1,55 +1,39 @@
 use anyhow::Context as _;
 use futures::{FutureExt, future::BoxFuture};
-use serenity::{
-    all::{
-        AutocompleteChoice, CommandInteraction, Context, CreateAutocompleteResponse,
-        CreateInteractionResponse, GuildId, GuildPagination, Permissions,
-    },
-    async_trait,
+use serenity::all::{
+    AutocompleteChoice, CommandInteraction, Context, CreateAutocompleteResponse, CreateCommand,
+    CreateInteractionResponse, GuildId, GuildPagination,
 };
-use serenity_command::{BotCommand, CommandBuilder, CommandKey, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{ArgList, CommandKey, CommandResponse, args, command};
 
+use crate::command_context::{get_focused_option, get_str_opt_ac};
 use crate::prelude::*;
-use crate::{
-    command_context::{get_focused_option, get_str_opt_ac},
+
+args!(COMMAND_ARGS =
+    command[autocomplete]: String,
+    guild[autocomplete]: String,
+);
+
+const ENABLE_COMMAND: CommandConst = CommandConst {
+    description: "Enables a command for a specific Guild (server)",
+    is_management: true,
+    ..command!(/enable_comand_for_guild COMMAND_ARGS: enable_command_for_guild)
 };
 
-#[derive(Command)]
-#[cmd(
-    name = "enable_command_for_guild",
-    desc = "Enables a command for a specific Guild (server)"
-)]
-pub struct EnableCommandForGuild {
-    #[cmd(autocomplete)]
-    pub command: String,
-    #[cmd(autocomplete)]
-    pub guild: String,
-}
-
-#[async_trait]
-impl BotCommand for EnableCommandForGuild {
-    type Data = Handler;
-    const IS_MANAGEMENT_COMMAND: bool = true;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        _: &CommandInteraction,
-    ) -> anyhow::Result<serenity_command::CommandResponse> {
-        let guild_id = self
-            .guild
+fn enable_command_for_guild<'a>(
+    handler: &'a Handler,
+    ctx: &'a Context,
+    command: &'a CommandInteraction,
+) -> BoxFuture<'a, anyhow::Result<CommandResponse>> {
+    async move {
+        let (command, guild) = COMMAND_ARGS.parse(&command.data).unwrap();
+        let guild_id = guild
             .parse::<u64>()
             .context("Invalid Guild Id, must be an integer")?;
         // check if command exists and get its runner to be able to register it
         let commands = handler.commands.read().await;
-        let Some((_, runner)) = commands
-            .0
-            .iter()
-            .find(|&((name, _), _)| *name == self.command)
-        else {
-            return CommandResponse::private(format!("command {} not found", self.command));
+        let Some((_, runner)) = commands.0.iter().find(|&((name, _), _)| *name == command) else {
+            return CommandResponse::private(format!("command {command} not found"));
         };
         // save in DB
         let guild = GuildId::new(guild_id);
@@ -57,74 +41,57 @@ impl BotCommand for EnableCommandForGuild {
             .db
             .lock()
             .await
-            .set_command_enabled_for_guild(&self.command, guild, true)?;
+            .set_command_enabled_for_guild(&command, guild, true)?;
         // register command in target guild
-        guild.create_command(&ctx.http, runner.register()).await?;
+        let mut cmd = CreateCommand::new(runner.name).description(runner.description);
+        cmd = (runner.register_options)(cmd);
+        guild.create_command(&ctx.http, cmd).await?;
         CommandResponse::public(format!(
-            "Enabled command '{}' for guild with id `{}`",
-            &self.command, self.guild
+            "Enabled command '{command}' for guild with id `{guild}`"
         ))
     }
+    .boxed()
 }
 
-#[derive(Command)]
-#[cmd(
-    name = "disable_command_for_guild",
-    desc = "Disables a command for a specific Guild (server)"
-)]
-pub struct DisableCommandForGuild {
-    #[cmd(autocomplete)]
-    pub command: String,
-    #[cmd(autocomplete)]
-    pub guild: String,
-}
-
-#[async_trait]
-impl BotCommand for DisableCommandForGuild {
-    type Data = Handler;
-    const IS_MANAGEMENT_COMMAND: bool = true;
-    const PERMISSIONS: Permissions = Permissions::ADMINISTRATOR;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        _: &CommandInteraction,
-    ) -> anyhow::Result<serenity_command::CommandResponse> {
-        let guild_id = self
-            .guild
-            .parse::<u64>()
-            .context("Invalid Guild Id, must be an integer")?;
-        // check if command exists and get its runner to be able to register it
-        let commands = handler.commands.read().await;
-        if !commands
-            .0
-            .iter()
-            .any(|(&(name, _), _)| name == self.command)
-        {
-            return CommandResponse::private(format!("command {} not found", self.command));
-        };
-        // save in DB
-        let guild = GuildId::new(guild_id);
-        handler
-            .db
-            .lock()
-            .await
-            .set_command_enabled_for_guild(&self.command, guild, false)?;
-        // unregister command in target guild
-        for command in guild.get_commands(&ctx.http).await? {
-            if command.name != self.command {
-                continue;
-            }
-            guild.delete_command(&ctx.http, command.id).await?;
-            break;
+async fn disable_command_for_guild(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let (cmd, guild) = COMMAND_ARGS.parse(&command.data).unwrap();
+    let guild_id = guild
+        .parse::<u64>()
+        .context("Invalid Guild Id, must be an integer")?;
+    // check if command exists and get its runner to be able to register it
+    let commands = handler.commands.read().await;
+    if !commands.0.iter().any(|(&(name, _), _)| name == cmd) {
+        return CommandResponse::private(format!("command {cmd} not found"));
+    };
+    // save in DB
+    let guild = GuildId::new(guild_id);
+    handler
+        .db
+        .lock()
+        .await
+        .set_command_enabled_for_guild(&cmd, guild, false)?;
+    // unregister command in target guild
+    for command in guild.get_commands(&ctx.http).await? {
+        if command.name != cmd {
+            continue;
         }
-        CommandResponse::public(format!(
-            "Disabled command '{}' for guild with id `{}`",
-            &self.command, self.guild
-        ))
+        guild.delete_command(&ctx.http, command.id).await?;
+        break;
     }
+    CommandResponse::public(format!(
+        "Disabled command '{cmd}' for guild with id `{guild}`",
+    ))
 }
+
+const DISABLE_COMMAND: CommandConst = CommandConst {
+    description: "Disables a command for a specific Guild (server)",
+    is_management: true,
+    ..command!(/disable_command_for_guild COMMAND_ARGS: disable_command_for_guild)
+};
 
 pub struct ModManagement {}
 
@@ -137,7 +104,7 @@ impl ModManagement {
     ) -> BoxFuture<'a, anyhow::Result<bool>> {
         async move {
             let cmd_name = ac.data.name.as_str();
-            if cmd_name != EnableCommandForGuild::NAME && cmd_name != DisableCommandForGuild::NAME {
+            if cmd_name != ENABLE_COMMAND.name && cmd_name != DISABLE_COMMAND.name {
                 return Ok(false);
             }
             let options = &ac.data.options;
@@ -177,7 +144,7 @@ impl ModManagement {
                     .0
                     .iter()
                     .filter(|((name, _), runner)| {
-                        runner.is_guild_command() && (partial.is_empty() || name.contains(partial))
+                        runner.is_guild && (partial.is_empty() || name.contains(partial))
                     })
                     .map(|(&(name, _), _)| name.to_string())
                     .take(25)
@@ -210,8 +177,8 @@ impl Module for ModManagement {
         _modal_store: &mut ModalCommandStore,
         completion_handlers: &mut CompletionStore,
     ) {
-        store.register::<EnableCommandForGuild>();
-        store.register::<DisableCommandForGuild>();
+        store.register(ENABLE_COMMAND);
+        store.register(DISABLE_COMMAND);
 
         completion_handlers.push(ModManagement::complete_management_command);
     }

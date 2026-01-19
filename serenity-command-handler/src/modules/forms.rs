@@ -31,8 +31,7 @@ use crate::{
     },
     prelude::*,
 };
-use serenity_command::{BotCommand, CommandKey, CommandResponse};
-use serenity_command_derive::Command;
+use serenity_command::{ArgList, CommandKey, CommandResponse, args, command};
 
 use super::complete::process_autocomplete;
 
@@ -359,48 +358,54 @@ pub struct FormCommand {
     pub submissions_range: Option<String>,
 }
 
-#[derive(Command, Debug)]
-#[cmd(
-    name = "command_from_form",
-    desc = "Create a submission command from a Google Form"
-)]
+args!(COMMAND_FROM_FORM_ARGS =
+    "The name of the command"
+    command_name: String,
+    "The edit id of the form to use (found in the url when editing it)"
+    form_id: String,
+    "Whether users will be submitting songs or albums"
+    submission_type: Option<String>,
+);
+
+fn set_command_from_form_options(
+    name: &str,
+    opt: CreateCommandOption<'static>,
+) -> CreateCommandOption<'static> {
+    if name == "submission_type" {
+        opt.add_string_choice("song", "song")
+            .add_string_choice("album", "album")
+    } else {
+        opt
+    }
+}
+
+pub const COMMAND_FROM_FORM: CommandConst = CommandConst {
+    description: "Create a submission command from a Google Form",
+    permissions: Permissions::MANAGE_EVENTS,
+    ..command!(/command_from_form COMMAND_FROM_FORM_ARGS(set_command_from_form_options): command_from_form)
+};
+
+#[derive(Debug)]
 pub struct CommandFromForm {
-    #[cmd(desc = "The name of the command")]
     pub command_name: String,
-    #[cmd(desc = "The edit id of the form to use (found in the url when editing it)")]
     pub form_id: String,
-    #[cmd(desc = "Whether users will be submitting songs or albums")]
     pub submission_type: Option<String>,
 }
 
-#[async_trait]
-impl BotCommand for CommandFromForm {
-    type Data = Handler;
-    const PERMISSIONS: Permissions = Permissions::MANAGE_EVENTS;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let guild_id = interaction
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?;
-        self.add_form(handler, ctx, guild_id).await
-    }
-
-    fn setup_options(
-        opt_name: &'static str,
-        opt: CreateCommandOption<'static>,
-    ) -> CreateCommandOption<'static> {
-        if opt_name == "submission_type" {
-            opt.add_string_choice("song", "song")
-                .add_string_choice("album", "album")
-        } else {
-            opt
-        }
-    }
+async fn command_from_form(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let guild_id = command.guild_id()?;
+    let (command_name, form_id, submission_type) =
+        COMMAND_FROM_FORM_ARGS.parse(&command.data).unwrap();
+    let params = CommandFromForm {
+        command_name,
+        form_id,
+        submission_type,
+    };
+    params.add_form(handler, ctx, guild_id).await
 }
 
 impl CommandFromForm {
@@ -490,175 +495,146 @@ pub async fn check_forms(handler: &Handler, ctx: &Context) -> anyhow::Result<()>
     Ok(())
 }
 
-#[derive(Command, Debug)]
-#[cmd(name = "refresh_form_command", desc = "Refreshes a form command")]
-pub struct RefreshFormCommand {
-    #[cmd(desc = "The name of the command to refresh", autocomplete)]
-    pub command_name: String,
-}
+args!(REFRESH_FORM_COMMAND_ARGS =
+     "The name of the command to refresh"
+    command_name[autocomplete]: String,
+);
 
-#[async_trait]
-impl BotCommand for RefreshFormCommand {
-    type Data = Handler;
-    const PERMISSIONS: Permissions = Permissions::MANAGE_EVENTS;
+pub const REFRESH_FORM_COMMAND: CommandConst = CommandConst {
+    description: "Refreshes a form command",
+    permissions: Permissions::MANAGE_EVENTS,
+    ..command!(/refresh_form_command REFRESH_FORM_COMMAND_ARGS: refresh_command)
+};
 
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let guild_id = interaction
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-
-        let (form, submission_type): (String, Option<String>) = {
-            let db = handler.db.lock().await;
-            db.conn().query_row(
-                "SELECT form, submission_type FROM forms WHERE guild_id = ?1 AND command_name = ?2",
-                params![guild_id, &self.command_name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .context(format!("Command /{} not found", &self.command_name))?
-        };
-        let form: SimpleForm = serde_json::from_slice(form.as_bytes())?;
-        CommandFromForm {
-            command_name: self.command_name,
-            form_id: form.id,
-            submission_type,
-        }
-        .run(handler, ctx, interaction)
-        .await
-    }
-}
-
-#[derive(Command, Debug)]
-#[cmd(
-    name = "delete_form_command",
-    desc = "Delete a form submission command"
-)]
-pub struct DeleteFormCommand {
-    #[cmd(desc = "The name of the command to delete", autocomplete)]
-    pub command_name: String,
-}
-
-#[async_trait]
-impl BotCommand for DeleteFormCommand {
-    type Data = Handler;
-    const PERMISSIONS: Permissions = Permissions::MANAGE_EVENTS;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let guild_id = interaction
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?;
-        if let Some(cmd) = guild_id
-            .get_commands(&ctx.http)
-            .await?
-            .iter()
-            .find(|cmd| cmd.name == self.command_name)
-        {
-            guild_id.delete_command(&ctx.http, cmd.id).await?;
-        }
-        let db = handler.db.lock().await;
-        db.conn().execute(
-            "DELETE FROM forms WHERE guild_id = ?1 AND command_name = ?2",
-            params![guild_id.get(), &self.command_name],
-        )?;
-        {
-            let mut forms = handler.module::<Forms>()?.forms.write().await;
-            forms.retain(|form| form.command_name != self.command_name);
-        }
-        CommandResponse::public(format!("Deleted command {}", &self.command_name))
-    }
-}
-
-#[derive(Command, Debug)]
-#[cmd(name = "list_forms", desc = "List submission forms and commands")]
-pub struct ListForms {}
-
-#[async_trait]
-impl BotCommand for ListForms {
-    type Data = Handler;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        _ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let guild_id = interaction
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        let forms = handler.module::<Forms>()?.forms.read().await;
-        let contents = forms
-            .iter()
-            .filter(|form| form.guild_id == guild_id)
-            .map(|form| {
-                format!(
-                    "**· [{}]({}):** </{}:{}>",
-                    &form.form.title, &form.form.responder_uri, &form.command_name, form.command_id,
-                )
-            })
-            .join("\n");
-        let embed = CreateEmbed::default()
-            .title("Registered forms")
-            .description(contents);
-        CommandResponse::public(embed)
-    }
-}
-
-#[derive(Command, Debug)]
-#[cmd(
-    name = "override_form_submissions_range",
-    desc = "To use if submissions don't go to the first tab of the linked sheet"
-)]
-pub struct OverrideSubmissionsRange {
-    #[cmd(desc = "The name of the command", autocomplete)]
-    pub command_name: String,
-    #[cmd(desc = "The range containing the responses, e.g. \"Tab 2\"!B:F")]
-    pub range: Option<String>,
-}
-
-#[async_trait]
-impl BotCommand for OverrideSubmissionsRange {
-    type Data = Handler;
-    const PERMISSIONS: Permissions = Permissions::MANAGE_EVENTS;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        _ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let guild_id = interaction
-            .guild_id
-            .ok_or_else(|| anyhow!("Must be run in a guild"))?
-            .get();
-        let module = handler.module::<Forms>()?;
-        let mut forms = module.forms.write().await;
-        let form = forms
-            .iter_mut()
-            .find(|form| form.guild_id == guild_id && form.command_name == self.command_name)
-            .ok_or_else(|| anyhow!("Command {} not found", &self.command_name))?;
-        form.submissions_range = self.range.clone();
+async fn refresh_command(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let guild_id = command.guild_id()?;
+    let (command_name,) = REFRESH_FORM_COMMAND_ARGS.parse(&command.data).unwrap();
+    let (form, submission_type): (String, Option<String>) = {
         let db = handler.db.lock().await;
         db.conn()
-            .execute(
-                "UPDATE forms SET submissions_range = ?3 WHERE guild_id = ?1 AND command_name = ?2",
-                params![guild_id, &self.command_name, self.range.as_deref(),],
+            .query_row(
+                "SELECT form, submission_type FROM forms WHERE guild_id = ?1 AND command_name = ?2",
+                params![guild_id.get(), &command_name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .context("Failed to update submissions range")?;
-        let range = self.range.as_deref().unwrap_or(DEFAULT_RANGE);
-        let resp = format!("Will search for submissions in `{range}`");
-        CommandResponse::public(resp)
+            .context(format!("Command /{} not found", &command_name))?
+    };
+    let form: SimpleForm = serde_json::from_slice(form.as_bytes())?;
+    let params = CommandFromForm {
+        command_name,
+        form_id: form.id,
+        submission_type,
+    };
+    params.add_form(handler, ctx, guild_id).await
+}
+
+args!(DELETE_FORM_COMMAND_ARGS =
+     "The name of the command to delete"
+    command_name[autocomplete]: String,
+);
+
+pub const DELETE_FORM_COMMAND: CommandConst = CommandConst {
+    description: "Delete a form submission command",
+    permissions: Permissions::MANAGE_EVENTS,
+    ..command!(/delete_form_command DELETE_FORM_COMMAND_ARGS: delete_command)
+};
+
+async fn delete_command(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let guild_id = command.guild_id()?;
+    let (command_name,) = DELETE_FORM_COMMAND_ARGS.parse(&command.data).unwrap();
+    if let Some(cmd) = guild_id
+        .get_commands(&ctx.http)
+        .await?
+        .iter()
+        .find(|cmd| cmd.name == command_name)
+    {
+        guild_id.delete_command(&ctx.http, cmd.id).await?;
     }
+    let db = handler.db.lock().await;
+    db.conn().execute(
+        "DELETE FROM forms WHERE guild_id = ?1 AND command_name = ?2",
+        params![guild_id.get(), &command_name],
+    )?;
+    {
+        let mut forms = handler.module::<Forms>()?.forms.write().await;
+        forms.retain(|form| form.command_name != command_name);
+    }
+    CommandResponse::public(format!("Deleted command {}", &command_name))
+}
+
+pub const LIST_FORMS: CommandConst = CommandConst {
+    description: "List submission forms and commands",
+    ..command!(/list_forms: list_forms)
+};
+
+async fn list_forms(
+    handler: &Handler,
+    _ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let guild_id = command.guild_id()?.get();
+    let forms = handler.module::<Forms>()?.forms.read().await;
+    let contents = forms
+        .iter()
+        .filter(|form| form.guild_id == guild_id)
+        .map(|form| {
+            format!(
+                "**· [{}]({}):** </{}:{}>",
+                &form.form.title, &form.form.responder_uri, &form.command_name, form.command_id,
+            )
+        })
+        .join("\n");
+    let embed = CreateEmbed::default()
+        .title("Registered forms")
+        .description(contents);
+    CommandResponse::public(embed)
+}
+
+args!(OVERRIDE_RANGE_ARGS =
+     "The name of the command"
+    command_name[autocomplete]: String,
+     "The range containing the responses, e.g. \"Tab 2\"!B:F"
+    range: Option<String>,
+);
+
+pub const OVERRIDE_SUBMISSION_RANGE: CommandConst = CommandConst {
+    description: "To use if submissions don't go to the first tab of the linked sheet",
+    permissions: Permissions::MANAGE_EVENTS,
+    ..command!(/override_form_submissions_range OVERRIDE_RANGE_ARGS: override_range)
+};
+
+async fn override_range(
+    handler: &Handler,
+    _ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let guild_id = command.guild_id()?.get();
+    let (command_name, range) = OVERRIDE_RANGE_ARGS.parse(&command.data).unwrap();
+    let module = handler.module::<Forms>()?;
+    let mut forms = module.forms.write().await;
+    let form = forms
+        .iter_mut()
+        .find(|form| form.guild_id == guild_id && form.command_name == command_name)
+        .ok_or_else(|| anyhow!("Command {} not found", &command_name))?;
+    form.submissions_range = range.clone();
+    let db = handler.db.lock().await;
+    db.conn()
+        .execute(
+            "UPDATE forms SET submissions_range = ?3 WHERE guild_id = ?1 AND command_name = ?2",
+            params![guild_id, &command_name, range.as_deref(),],
+        )
+        .context("Failed to update submissions range")?;
+    let range = range.as_deref().unwrap_or(DEFAULT_RANGE);
+    let resp = format!("Will search for submissions in `{range}`");
+    CommandResponse::public(resp)
 }
 
 pub fn load_forms(db: &Connection) -> anyhow::Result<Vec<FormCommand>> {
@@ -860,37 +836,31 @@ impl SimpleForm {
     }
 }
 
-#[derive(Command)]
-#[cmd(name = "get_submissions", desc = "Get your submissions to a form")]
-pub struct GetSubmissions {
-    #[cmd(desc = "the command used to submit", autocomplete)]
-    pub command_name: String,
-}
+args!(GET_SUBMISSIONS_ARGS =
+     "the command used to submit"
+    command_name[autocomplete]: String,
+);
 
-#[async_trait]
-impl BotCommand for GetSubmissions {
-    type Data = Handler;
+pub const GET_SUBMISSIONS: CommandConst = CommandConst {
+    description: "Get your submissions to a form",
+    ..command!(/get_submissions GET_SUBMISSIONS_ARGS: get_submissions)
+};
 
-    async fn run(
-        self,
-        handler: &Handler,
-        _ctx: &Context,
-        interaction: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let forms: &Forms = handler.module()?;
-        let forms = forms.forms.read().await;
-        let cmd_name = &self.command_name;
-        let Some(form) = forms.iter().find(|form| &form.command_name == cmd_name) else {
-            bail!("Command {} not found", cmd_name);
-        };
-        form.form
-            .get_submissions_for_user(
-                handler,
-                &interaction.user,
-                form.submissions_range.as_deref(),
-            )
-            .await
-    }
+async fn get_submissions(
+    handler: &Handler,
+    _ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let (command_name,) = GET_SUBMISSIONS_ARGS.parse(&command.data).unwrap();
+    let forms: &Forms = handler.module()?;
+    let forms = forms.forms.read().await;
+    let cmd_name = &command_name;
+    let Some(form) = forms.iter().find(|form| &form.command_name == cmd_name) else {
+        bail!("Command {} not found", cmd_name);
+    };
+    form.form
+        .get_submissions_for_user(handler, &command.user, form.submissions_range.as_deref())
+        .await
 }
 
 pub struct Forms {
@@ -957,13 +927,18 @@ impl Module for Forms {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
-        store.register::<CommandFromForm>();
-        store.register::<ListForms>();
-        store.register::<DeleteFormCommand>();
-        store.register::<RefreshFormCommand>();
-        store.register::<GetSubmissions>();
-        store.register::<OverrideSubmissionsRange>();
+    fn register_commands(
+        &self,
+        store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
+        completions: &mut CompletionStore,
+    ) {
+        store.register(COMMAND_FROM_FORM);
+        store.register(LIST_FORMS);
+        store.register(DELETE_FORM_COMMAND);
+        store.register(REFRESH_FORM_COMMAND);
+        store.register(GET_SUBMISSIONS);
+        store.register(OVERRIDE_SUBMISSION_RANGE);
 
         completions.push(Forms::complete_forms);
     }

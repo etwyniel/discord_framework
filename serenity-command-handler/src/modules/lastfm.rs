@@ -19,7 +19,7 @@ use serenity::builder::{
 use serenity::model::prelude::CommandInteraction;
 use serenity::model::prelude::CommandType;
 use serenity::prelude::{Context, Mutex};
-use serenity_command::{BotCommand, CommandKey, CommandResponse};
+use serenity_command::{ArgList, CommandKey, CommandResponse, args, command};
 
 use std::collections::HashMap;
 use std::env;
@@ -34,7 +34,6 @@ use crate::command_context::{get_focused_option, get_str_opt_ac};
 use crate::db::Db;
 use crate::modules::Spotify;
 use crate::{RegisterableModule, prelude::*};
-use serenity_command_derive::Command;
 
 const API_ENDPOINT: &str = "http://ws.audioscrobbler.com/2.0/";
 
@@ -233,42 +232,56 @@ pub struct MbReleaseInfo {
     pub date: String,
 }
 
-#[derive(Command, Debug)]
-#[cmd(name = "aoty", desc = "Get your albums of the year")]
+args!(GETAOTYS_ARGS =
+    "Last.fm username"
+    username: String,
+    year: Option<i64>,
+    year_range: Option<String>,
+    "Skip albums without album art"
+    skip: Option<bool>,
+);
+
+const GETAOTYS: CommandConst = CommandConst {
+    description: "Get your albums of the year",
+    ..command!(/aoty GETAOTYS_ARGS: get_aotys)
+};
+
+#[derive(Debug)]
 pub struct GetAotys {
-    #[cmd(desc = "Last.fm username")]
     pub username: String,
     pub year: Option<i64>,
     pub year_range: Option<String>,
-    #[cmd(desc = "Skip albums without album art")]
     pub skip: Option<bool>,
 }
 
-#[async_trait]
-impl BotCommand for GetAotys {
-    type Data = Handler;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        opts: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        opts.create_response(
+async fn get_aotys(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let (username, year, year_range, skip) = GETAOTYS_ARGS.parse(&command.data).unwrap();
+    command
+        .create_response(
             &ctx.http,
             CreateInteractionResponse::Defer(Default::default()),
         )
         .await?;
-        if let Err(e) = self.get_aotys(handler, ctx, opts).await {
-            eprintln!("get aotys failed: {:?}", &e);
-            opts.create_followup(
+    let params = GetAotys {
+        username,
+        year,
+        year_range,
+        skip,
+    };
+    if let Err(e) = params.get_aotys(handler, ctx, command).await {
+        eprintln!("get aotys failed: {:?}", &e);
+        command
+            .create_followup(
                 &ctx.http,
                 CreateInteractionResponseFollowup::new().content(e.to_string()),
             )
             .await?;
-        }
-        Ok(CommandResponse::None)
     }
+    Ok(CommandResponse::None)
 }
 
 impl GetAotys {
@@ -411,34 +424,45 @@ pub async fn create_aoty_chart(albums: &[AlbumWithImage], skip: bool) -> anyhow:
     Ok(writer.into_inner())
 }
 
-#[derive(Command, Debug)]
-#[cmd(name = "soty", desc = "Get your songs of the year")]
+args!(SOTY_ARGS =
+"Last.fm username"
+username: String,
+year: Option<i64>,
+"Skip albums without album art"
+skip: Option<bool>,
+);
+
+pub const SOTY: CommandConst = CommandConst {
+    description: "Get your songs of the year",
+    ..command!(/soty SOTY_ARGS: get_soty)
+};
+
+#[derive(Debug)]
 pub struct GetSotys {
-    #[cmd(desc = "Last.fm username")]
     pub username: String,
     pub year: Option<i64>,
-    #[cmd(desc = "Skip albums without album art")]
     pub skip: Option<bool>,
 }
 
-#[async_trait]
-impl BotCommand for GetSotys {
-    type Data = Handler;
-
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        opts: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        opts.create_response(
+async fn get_soty(
+    handler: &Handler,
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    command
+        .create_response(
             &ctx.http,
             CreateInteractionResponse::Defer(Default::default()),
         )
         .await?;
-        self.get_soty(handler, ctx, opts).await?;
-        Ok(CommandResponse::None)
-    }
+    let (username, year, skip) = SOTY_ARGS.parse(&command.data).unwrap();
+    let params = GetSotys {
+        username,
+        year,
+        skip,
+    };
+    params.get_soty(handler, ctx, command).await?;
+    Ok(CommandResponse::None)
 }
 
 impl GetSotys {
@@ -987,53 +1011,41 @@ fn get_release_year_db(db: &Db, artist: &str, album: &str) -> Result<u64, u64> {
     }
 }
 
-#[derive(Command, Debug)]
-#[cmd(
-    name = "fix_release_year",
-    desc = "Correct or set the release year of an album"
-)]
-pub struct FixReleaseYear {
-    #[cmd(desc = "Album artist", autocomplete)]
-    pub artist: String,
-    #[cmd(desc = "Album title", autocomplete)]
-    pub album: String,
-    pub year: i64,
-}
+args!(FIX_RELEASE_YEAR_ARGS =
+    "Album artist"
+    artist[autocomplete]: String,
+    "Album title"
+    album[autocomplete]: String,
+    year: i64,
+);
 
-#[async_trait]
-impl BotCommand for FixReleaseYear {
-    type Data = Handler;
+const FIX_RELEASE_YEAR: CommandConst = CommandConst {
+    description: "Correct or set the release year of an album",
+    ..command!(/fix_release_year FIX_RELEASE_YEAR_ARGS: fix_release_year)
+};
 
-    async fn run(
-        self,
-        handler: &Handler,
-        _ctx: &Context,
-        _opts: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        let db = handler.db.lock().await;
-        let current_value = match get_release_year_db(&db, &self.artist, &self.album) {
-            Ok(year) if year == self.year as u64 => bail!("Release year is already {year}"),
-            Ok(year) => Some(year),
-            Err(0) => bail!("Album not found in database, check spelling?"),
-            _ => None,
-        };
-        db.conn().execute(
-            "UPDATE album_cache SET year = ?3, last_checked = 0 WHERE artist = ?1 AND album = ?2",
-            params![
-                self.artist.to_lowercase(),
-                self.album.to_lowercase(),
-                self.year
-            ],
-        )?;
-        let mut resp = format!(
-            "Updated release year of {} - {} to {}",
-            &self.artist, &self.album, self.year
-        );
-        if let Some(prev) = current_value {
-            resp.push_str(&format!(" (was {prev})"));
-        }
-        CommandResponse::public(resp)
+async fn fix_release_year(
+    handler: &Handler,
+    _ctx: &Context,
+    command: &CommandInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let (album, artist, year) = FIX_RELEASE_YEAR_ARGS.parse(&command.data).unwrap();
+    let db = handler.db.lock().await;
+    let current_value = match get_release_year_db(&db, &artist, &album) {
+        Ok(y) if y == year as u64 => bail!("Release year is already {year}"),
+        Ok(y) => Some(y),
+        Err(0) => bail!("Album not found in database, check spelling?"),
+        _ => None,
+    };
+    db.conn().execute(
+        "UPDATE album_cache SET year = ?3, last_checked = 0 WHERE artist = ?1 AND album = ?2",
+        params![artist.to_lowercase(), album.to_lowercase(), year],
+    )?;
+    let mut resp = format!("Updated release year of {artist} - {album} to {year}",);
+    if let Some(prev) = current_value {
+        resp.push_str(&format!(" (was {prev})"));
     }
+    CommandResponse::public(resp)
 }
 
 #[allow(clippy::let_and_return)] // doesn't compile if the lint is obeyed....
@@ -1106,9 +1118,14 @@ impl Module for Lastfm {
         Ok(())
     }
 
-    fn register_commands(&self, store: &mut CommandStore, _modal_store: &mut ModalCommandStore, completions: &mut CompletionStore) {
-        store.register::<GetAotys>();
-        store.register::<FixReleaseYear>();
+    fn register_commands(
+        &self,
+        store: &mut CommandStore,
+        _modal_store: &mut ModalCommandStore,
+        completions: &mut CompletionStore,
+    ) {
+        store.register(GETAOTYS);
+        store.register(FIX_RELEASE_YEAR);
         completions.push(complete_album);
     }
 }

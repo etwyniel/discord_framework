@@ -11,10 +11,9 @@ use crate::modules::Spotify;
 use crate::prelude::*;
 use rspotify::clients::BaseClient;
 use serenity::prelude::Context;
-use serenity_command::CommandBuilder;
 
 use super::forms::{
-    DeleteFormCommand, Forms, GetSubmissions, OverrideSubmissionsRange, RefreshFormCommand,
+    DELETE_FORM_COMMAND, Forms, GET_SUBMISSIONS, OVERRIDE_SUBMISSION_RANGE, REFRESH_FORM_COMMAND,
 };
 use super::spotify_activity::SpotifyActivity;
 
@@ -89,44 +88,44 @@ pub async fn process_autocomplete(
         Some(opt) => opt,
         None => return Ok(true),
     };
-    match cmd_name {
-        DeleteFormCommand::NAME
-        | RefreshFormCommand::NAME
-        | GetSubmissions::NAME
-        | OverrideSubmissionsRange::NAME => {
-            let opt = get_str_opt_ac(options, "command_name").unwrap_or_default();
-            choices = forms
-                .forms
-                .read()
-                .await
-                .iter()
-                .filter(|form| form.guild_id == guild_id && form.command_name.contains(opt))
-                .map(|form| &form.command_name)
-                .map(|cmd_name| (cmd_name.clone(), cmd_name.clone()))
-                .collect();
-        }
-        _ => {
-            let forms = forms.forms.read().await;
-            let form = forms
-                .iter()
-                .find(|form| form.guild_id == guild_id && form.command_name == cmd_name);
-            if let Some(form) = form {
-                if focused.contains("spotify") || focused.contains("link") {
-                    let val = match get_str_opt_ac(options, focused) {
-                        Some(val) => val,
-                        None => return Ok(true),
-                    };
-                    let ty = match form.submission_type.as_str() {
-                        "album" => CompletionType::Albums,
-                        _ => CompletionType::Songs,
-                    };
-                    choices = autocomplete_link(handler, ac.user.id, val, ty).await;
-                } else {
-                    return Ok(true);
-                }
+    const FORM_COMMANDS: [&str; 4] = [
+        DELETE_FORM_COMMAND.name,
+        REFRESH_FORM_COMMAND.name,
+        GET_SUBMISSIONS.name,
+        OVERRIDE_SUBMISSION_RANGE.name,
+    ];
+    if FORM_COMMANDS.contains(&cmd_name) {
+        let opt = get_str_opt_ac(options, "command_name").unwrap_or_default();
+        choices = forms
+            .forms
+            .read()
+            .await
+            .iter()
+            .filter(|form| form.guild_id == guild_id && form.command_name.contains(opt))
+            .map(|form| &form.command_name)
+            .map(|cmd_name| (cmd_name.clone(), cmd_name.clone()))
+            .collect();
+    } else {
+        let forms = forms.forms.read().await;
+        let form = forms
+            .iter()
+            .find(|form| form.guild_id == guild_id && form.command_name == cmd_name);
+        if let Some(form) = form {
+            if focused.contains("spotify") || focused.contains("link") {
+                let val = match get_str_opt_ac(options, focused) {
+                    Some(val) => val,
+                    None => return Ok(true),
+                };
+                let ty = match form.submission_type.as_str() {
+                    "album" => CompletionType::Albums,
+                    _ => CompletionType::Songs,
+                };
+                choices = autocomplete_link(handler, ac.user.id, val, ty).await;
             } else {
-                return Ok(false);
+                return Ok(true);
             }
+        } else {
+            return Ok(false);
         }
     }
     let resp =

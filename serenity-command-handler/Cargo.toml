@@ -15,7 +15,6 @@ rspotify-http = "0.15"
 rusqlite = { version = "0.38", features = ["chrono", "fallible_uint"] }
 regex = "1.6"
 anyhow = "1.0"
-serenity-command-derive = { version = "0.1.0", path = "../serenity-command-derive" }
 serenity-command = { version = "0.1.0", path = "../serenity-command" }
 reqwest = { version = "0.13", features = ["json", "form", "query"] }
 chrono = "0.4.24"

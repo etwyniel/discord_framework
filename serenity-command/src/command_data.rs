@@ -156,7 +156,15 @@ impl<T> Arg<T> {
 
 pub trait ArgList {
     type Output;
-    fn add_options(&self, command: CreateCommand<'static>) -> CreateCommand<'static>;
+    fn add_options(&self, command: CreateCommand<'static>) -> CreateCommand<'static> {
+        self.add_options_with(command, |_, o| o)
+    }
+
+    fn add_options_with(
+        &self,
+        command: CreateCommand<'static>,
+        extra: fn(&str, CreateCommandOption<'static>) -> CreateCommandOption<'static>,
+    ) -> CreateCommand<'static>;
     fn parse(&self, data: &CommandData) -> Option<Self::Output>;
 }
 
@@ -172,9 +180,9 @@ macro_rules! tuple_impls {
         #[allow(nonstandard_style)]
         impl<$($T: FromOptionValue),+> ArgList for ($(Arg<$T>,)+) {
             type Output = ($( $T, )+);
-            fn add_options(&self, command: CreateCommand<'static>) -> CreateCommand<'static> {
+            fn add_options_with(&self, command: CreateCommand<'static>, extra: fn(&str, CreateCommandOption<'static>) -> CreateCommandOption<'static>) -> CreateCommand<'static> {
                 let ($($T,)+) = self;
-                command $( .add_option($T.as_option()) )+
+                command $( .add_option(extra($T.name, $T.as_option())) )+
             }
 
             fn parse(&self, data: &CommandData) -> Option<($( $T, )+)> {
@@ -189,8 +197,11 @@ tuple_impls!(E D C B A Z Y X W V U T);
 
 #[macro_export]
 macro_rules! arg {
-    ($arg:ident: $T:ty) => {
-        arg!("" $arg: $T)
+    ($arg:ident$([])*: $T:ty) => {
+        $crate::arg!("" $arg: $T)
+    };
+    ($arg:ident[autocomplete]: $T:ty) => {
+        $crate::arg!("" $arg[autocomplete]: $T)
     };
     ($desc:literal $arg:ident$([])*: $T:ty) => {
         $crate::Arg::<$T>::new(stringify!(arg), $desc, false)
