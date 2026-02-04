@@ -103,12 +103,7 @@ impl Module for Sql {
         Ok(())
     }
 
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _completions: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(QUERY);
     }
 }

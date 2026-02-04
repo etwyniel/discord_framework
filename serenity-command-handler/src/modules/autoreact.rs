@@ -16,7 +16,7 @@ use serenity::{
 };
 
 use crate::{
-    RegisterableModule,
+    CompletionHandler, RegisterableModule,
     command_context::{get_focused_option, get_str_opt_ac},
     db::Db,
     prelude::*,
@@ -322,16 +322,10 @@ impl Module for ModAutoreacts {
         Ok(())
     }
 
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        completions: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(ADD_AUTOREACT);
         store.register(REMOVE_AUTOREACT);
-
-        completions.push(ModAutoreacts::complete_reacts);
+        store.register(ModAutoreacts::complete_reacts as CompletionHandler);
     }
 }
 

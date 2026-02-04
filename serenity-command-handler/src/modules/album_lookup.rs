@@ -163,12 +163,7 @@ impl AlbumLookup {
 
 #[async_trait]
 impl Module for AlbumLookup {
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _completions: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(LOOKUP_ALBUM);
     }
 }

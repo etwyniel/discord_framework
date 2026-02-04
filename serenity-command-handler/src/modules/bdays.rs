@@ -261,12 +261,7 @@ impl Module for Bdays {
         Ok(())
     }
 
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(GET_BDAYS);
         store.register(SET_BDAY);
     }

@@ -473,12 +473,7 @@ impl Module for PlaylistBuilder {
         db.add_guild_field("playlist_name", "STRING")
     }
 
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _completion_handlers: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(BUILD_PLAYLIST);
         // store.register::<GetMySubmissions>();
     }

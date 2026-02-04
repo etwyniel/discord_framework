@@ -1,8 +1,8 @@
 use anyhow::anyhow;
 use serenity::{
     all::{
-        ModalComponent, CreateAttachment, GenericChannelId, GuildId, Label, LabelComponent, Member,
-        ModalInteraction, RoleId, User,
+        ComponentInteraction, CreateAttachment, GenericChannelId, GuildId, Label, LabelComponent,
+        Member, ModalComponent, ModalInteraction, RoleId, User,
     },
     async_trait,
     builder::{CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage},
@@ -94,6 +94,38 @@ impl InteractionExt for ModalInteraction {
 
     async fn get_response(&self, http: &Http) -> serenity::Result<Message> {
         ModalInteraction::get_response(self, http).await
+    }
+}
+
+#[async_trait]
+impl InteractionExt for ComponentInteraction {
+    fn channel_id(&self) -> GenericChannelId {
+        self.channel_id
+    }
+
+    fn guild_id(&self) -> anyhow::Result<GuildId> {
+        self.guild_id
+            .ok_or_else(|| anyhow!("Must be run in a server"))
+    }
+
+    fn user(&self) -> &User {
+        &self.user
+    }
+
+    fn member(&self) -> Option<&Member> {
+        self.member.as_ref()
+    }
+
+    async fn create_response(
+        &self,
+        http: &Http,
+        builder: CreateInteractionResponse<'_>,
+    ) -> serenity::Result<()> {
+        ComponentInteraction::create_response(self, http, builder).await
+    }
+
+    async fn get_response(&self, http: &Http) -> serenity::Result<Message> {
+        ComponentInteraction::get_response(self, http).await
     }
 }
 

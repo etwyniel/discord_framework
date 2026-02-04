@@ -559,12 +559,7 @@ impl Default for ModPoll {
 
 #[async_trait]
 impl Module for ModPoll {
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _completions: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(READY_POLL);
         store.register(POLL);
     }

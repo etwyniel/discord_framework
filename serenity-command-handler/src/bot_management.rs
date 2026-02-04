@@ -7,7 +7,7 @@ use serenity::all::{
 use serenity_command::{CommandKey, CommandResponse, args, command};
 
 use crate::command_context::{get_focused_option, get_str_opt_ac};
-use crate::prelude::*;
+use crate::{CompletionHandler, prelude::*};
 
 args!(COMMAND_ARGS =
     command[autocomplete]: String,
@@ -168,15 +168,10 @@ impl RegisterableModule for ModManagement {
 }
 
 impl Module for ModManagement {
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        completion_handlers: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(ENABLE_COMMAND);
         store.register(DISABLE_COMMAND);
 
-        completion_handlers.push(ModManagement::complete_management_command);
+        store.register(ModManagement::complete_management_command as CompletionHandler);
     }
 }

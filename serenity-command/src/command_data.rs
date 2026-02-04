@@ -1,12 +1,22 @@
 use std::marker::PhantomData;
 
 use serenity::all::{
-    CommandData, CommandDataOptionValue, CommandOptionType, CreateCommand, CreateCommandOption,
-    RoleId, UserId,
+    CommandData, CommandDataOptionValue, CommandOptionType, ComponentInteractionData,
+    ComponentInteractionDataKind, CreateCommand, CreateCommandOption, LabelComponent,
+    ModalComponent, ModalInteractionData, RoleId, UserId,
 };
 
 pub trait FromOptionValue: Sized {
     fn from_option_value(value: &CommandDataOptionValue) -> Option<Self>;
+    fn from_component(_value: &ComponentInteractionDataKind) -> Option<Self> {
+        None
+    }
+    fn from_str(_value: &str) -> Option<Self> {
+        None
+    }
+    fn from_strings(_value: &[String]) -> Option<Self> {
+        None
+    }
     fn kind() -> CommandOptionType;
     fn reqired() -> bool {
         true
@@ -22,6 +32,20 @@ impl FromOptionValue for String {
             CommandDataOptionValue::String(s) => Some(s.to_string()),
             _ => None,
         }
+    }
+
+    fn from_component(value: &ComponentInteractionDataKind) -> Option<Self> {
+        let ComponentInteractionDataKind::StringSelect { values } = value else {
+            return None;
+        };
+        values.first().map(|s| s.to_string())
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        if value.is_empty() {
+            return None;
+        }
+        Some(value.to_string())
     }
 
     fn kind() -> CommandOptionType {
@@ -76,6 +100,17 @@ impl FromOptionValue for UserId {
         }
     }
 
+    fn from_component(value: &ComponentInteractionDataKind) -> Option<Self> {
+        let ComponentInteractionDataKind::UserSelect { values } = value else {
+            return None;
+        };
+        values.first().copied()
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        Some(UserId::new(value.parse::<u64>().ok()?))
+    }
+
     fn kind() -> CommandOptionType {
         CommandOptionType::User
     }
@@ -89,6 +124,17 @@ impl FromOptionValue for RoleId {
         }
     }
 
+    fn from_component(value: &ComponentInteractionDataKind) -> Option<Self> {
+        let ComponentInteractionDataKind::RoleSelect { values } = value else {
+            return None;
+        };
+        values.first().copied()
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        Some(RoleId::new(value.parse::<u64>().ok()?))
+    }
+
     fn kind() -> CommandOptionType {
         CommandOptionType::Role
     }
@@ -97,6 +143,18 @@ impl FromOptionValue for RoleId {
 impl<T: FromOptionValue> FromOptionValue for Option<T> {
     fn from_option_value(value: &CommandDataOptionValue) -> Option<Self> {
         Some(T::from_option_value(value))
+    }
+
+    fn from_component(value: &ComponentInteractionDataKind) -> Option<Self> {
+        Some(T::from_component(value))
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        Some(T::from_str(value))
+    }
+
+    fn from_strings(value: &[String]) -> Option<Self> {
+        Some(T::from_strings(value))
     }
 
     fn kind() -> CommandOptionType {
@@ -109,6 +167,22 @@ impl<T: FromOptionValue> FromOptionValue for Option<T> {
 
     fn default() -> Option<Self> {
         Some(None)
+    }
+}
+
+impl<T: FromOptionValue> FromOptionValue for Vec<T> {
+    fn from_option_value(_: &CommandDataOptionValue) -> Option<Self> {
+        None
+    }
+
+    // FIXME handle from_component
+
+    fn kind() -> CommandOptionType {
+        panic!("Array arguments can only be used in modals and components")
+    }
+
+    fn from_strings(value: &[String]) -> Option<Self> {
+        value.iter().map(|v| T::from_str(v)).collect()
     }
 }
 
@@ -132,6 +206,37 @@ impl CommandDataExt for CommandData {
             .find(|opt| opt.name == arg.name)
             .and_then(|opt| T::from_option_value(&opt.value))
             .or_else(T::default)
+    }
+}
+
+impl CommandDataExt for ModalInteractionData {
+    fn value<T: FromOptionValue>(&self, field: &str) -> Option<T> {
+        let components = self.components.as_slice();
+        for comp in components {
+            let ModalComponent::Label(label) = comp else {
+                continue;
+            };
+            match &label.component {
+                LabelComponent::InputText(text) if text.custom_id == field => {
+                    return T::from_str(text.value.as_deref()?);
+                }
+                LabelComponent::SelectMenu(select) if select.custom_id == field => {
+                    if select.values.len() == 1 {
+                        let single = T::from_str(select.values[0].as_str());
+                        if single.is_some() {
+                            return single;
+                        }
+                    }
+                    return T::from_strings(select.values.as_slice());
+                }
+                _ => continue,
+            }
+        }
+        T::default()
+    }
+
+    fn arg<T: FromOptionValue>(&self, arg: &Arg<T>) -> Option<T> {
+        self.value(arg.name)
     }
 }
 
@@ -183,6 +288,8 @@ pub trait ArgList {
         extra: fn(&str, CreateCommandOption<'static>) -> CreateCommandOption<'static>,
     ) -> CreateCommand<'static>;
     fn parse(&self, data: &CommandData) -> anyhow::Result<Self::Output>;
+    fn parse_modal(&self, data: &ModalInteractionData) -> anyhow::Result<Self::Output>;
+    fn parse_component(&self, data: &ComponentInteractionData) -> anyhow::Result<Self::Output>;
 }
 
 macro_rules! tuple_impls {
@@ -208,6 +315,19 @@ macro_rules! tuple_impls {
                 use anyhow::Context;
                 let ($($T,)+) = self;
                 Ok(($( $T.value(data).context(format!("no value for required argument {}", $T.name))?, )+))
+            }
+
+            fn parse_modal(&self, data: &ModalInteractionData) -> anyhow::Result<($( $T, )+)> {
+                use anyhow::Context;
+                use $crate::CommandDataExt;
+                let ($($T,)+) = self;
+                Ok(($( data.arg($T).context(format!("no appropriate value found for argument {}", $T.name))?, )+))
+            }
+
+            fn parse_component(&self, data: &ComponentInteractionData) -> anyhow::Result<($( $T, )+)> {
+                use anyhow::Context;
+                let ($($T,)+) = self;
+                Ok(($( $T::from_component(&data.kind).context(format!("no appropriate value found for argument {}", $T.name))?, )+))
             }
         }
     };
@@ -239,28 +359,3 @@ macro_rules! args {
         const $name: ( $($crate::Arg<$T>,)+ ) = ( $( $crate::arg!($($desc)* $arg[$($($extra)*)*]: $T), )+ );
     };
 }
-
-#[macro_export]
-macro_rules! args2 {
-    (@parsed ($( $Ts:ident, )*) ($( $args:expr, )*) $name:ident =) => {
-        const $name: ( $($crate::Arg<$Ts>,)* ) = ( $( $args, )*);
-    };
-    (@parsed ($( $Ts:ident, )*) ($( $args:expr, )*) $name:ident = $desc:literal $arg:ident: $T:ty $(,)*) => {
-        const $name: ( $($crate::Arg<$Ts>,)* $crate::Arg<$T>, ) = ( $( $args, )* arg!($desc $arg: $T),);
-    };
-    (@parsed ($( $Ts:ident, )*) ($( $args:expr, )*) $name:ident = $desc:literal $arg:ident[autocomplete]: $T:ty $(,)*) => {
-        const $name: ( $($crate::Arg<$Ts>,)* $crate::Arg<$T>, ) = ( $( $args, )* arg!($desc $arg[autocomplete]: $T),);
-    };
-    (@parsed ($( $Ts:ident, )*) ($( $args:expr, )*) $name:ident = $desc:literal $arg:ident: $T:ty, $($rem:tt)*) => {
-        args2!(@parsed ($( $Ts, )* $T) ($( $args, )* arg!($desc $arg: T)) $name: $($rem)*)
-    };
-    (@parsed ($( $Ts:ident, )*) ($( $args:expr, )*) $name:ident = $desc:literal $arg:ident[autocomplete]: $T:ty, $($rem:tt)*) => {
-        args2!(@parsed ($( $Ts, )* $T) ($( $args, )* arg!($desc $arg[autocomplete]: T)) $name: $($rem)*)
-    };
-    ($name:ident = $($rem:tt)*) => {args2!(@parsed () () $($rem)*)};
-}
-
-// trait Argument<T: FromOptionValue, P> {
-//     const NAME: &'static str;
-//     type WITH<U, const N: &'static str> = Argument<U, Self>;
-// }

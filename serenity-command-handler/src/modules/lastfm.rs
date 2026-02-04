@@ -1118,15 +1118,10 @@ impl Module for Lastfm {
         Ok(())
     }
 
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        completions: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(GETAOTYS);
         store.register(FIX_RELEASE_YEAR);
-        completions.push(complete_album);
+        store.register(complete_album as CompletionHandler);
     }
 }
 

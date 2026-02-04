@@ -926,12 +926,7 @@ impl Module for Forms {
         Ok(())
     }
 
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        completions: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(COMMAND_FROM_FORM);
         store.register(LIST_FORMS);
         store.register(DELETE_FORM_COMMAND);
@@ -939,7 +934,7 @@ impl Module for Forms {
         store.register(GET_SUBMISSIONS);
         store.register(OVERRIDE_SUBMISSION_RANGE);
 
-        completions.push(Forms::complete_forms);
+        store.register(Forms::complete_forms as CompletionHandler);
     }
 }
 

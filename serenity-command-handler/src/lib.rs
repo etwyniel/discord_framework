@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail};
 use bot_management::ModManagement;
 use rusqlite::Connection;
 pub use serenity; // re-export
-use serenity::all::RoleId;
+use serenity::all::{ComponentInteraction, ModalInteraction};
 use serenity::model::prelude::{GuildId, UserId};
 use serenity::{
     async_trait,
@@ -32,12 +32,12 @@ use db::Db;
 
 use command_context::Responder;
 
-use crate::command_context::{get_select_values, get_text_input_value};
-use crate::modules::lp::Lp;
-
 pub type CommandConst = serenity_command::CommandConst<Handler>;
 pub type CommandStore = serenity_command::CommandStore<'static, Handler>;
+pub type ModalCommandConst = serenity_command::ModalCommandConst<Handler>;
 pub type ModalCommandStore = serenity_command::ModalCommandStore<'static, Handler>;
+pub type ComponentCommandConst = serenity_command::ComponentCommandConst<Handler>;
+pub type ComponentCommandStore = serenity_command::ComponentCommandStore<'static, Handler>;
 
 type SpecialCommand = for<'a> fn(
     &'a Handler,
@@ -115,6 +115,7 @@ pub struct Handler {
     pub management_guild: GuildId,
     pub commands: RwLock<CommandStore>,
     pub modal_commands: RwLock<ModalCommandStore>,
+    pub component_commands: RwLock<ComponentCommandStore>,
     pub http: OnceCell<Arc<Http>>,
     pub modules: ModuleMap,
     pub module_list: Vec<Arc<dyn Module>>,
@@ -133,6 +134,7 @@ impl Handler {
             management_guild,
             commands: Default::default(),
             modal_commands: Default::default(),
+            component_commands: Default::default(),
             modules: Default::default(),
             module_list: Default::default(),
             special_commands: Default::default(),
@@ -169,6 +171,32 @@ impl Handler {
             return h(self, ctx, cmd).await;
         } else {
             bail!("Unknown command {name}")
+        }
+    }
+
+    async fn process_modal(
+        &self,
+        ctx: &Context,
+        modal: &ModalInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let name = modal.data.custom_id.as_str();
+        if let Some(command) = self.modal_commands.read().await.0.get(name) {
+            (command.run)(self, ctx, modal).await
+        } else {
+            bail!("Uknown modal interaction '{name}'")
+        }
+    }
+
+    async fn process_component(
+        &self,
+        ctx: &Context,
+        component: &ComponentInteraction,
+    ) -> anyhow::Result<CommandResponse> {
+        let name = component.data.custom_id.as_str();
+        if let Some(command) = self.component_commands.read().await.0.get(name) {
+            (command.run)(self, ctx, component).await
+        } else {
+            bail!("Uknown component interaction '{name}'")
         }
     }
 
@@ -221,34 +249,85 @@ impl Handler {
                 eprintln!("cannot respond to slash command: {why:?}");
             }
         } else if let Interaction::Modal(modal) = interaction {
-            let components = modal.data.components.as_slice();
-            let album = get_text_input_value(components, "album")
-                .unwrap()
-                .to_owned();
-            let link = get_text_input_value(components, "link").map(str::to_owned);
-            let desc = get_text_input_value(components, "description");
-            let time = get_text_input_value(components, "time").map(str::to_owned);
-            let role = get_select_values(components, "role")
-                .first()
-                .map(|s| RoleId::new(s.parse::<u64>().unwrap()));
-            let lp = Lp {
-                album,
-                link,
-                time,
-                provider: None,
-                role,
+            // log command
+            let guild_name = if let Some(guild) = modal.guild_id {
+                guild
+                    .to_partial_guild(&ctx.http)
+                    .await
+                    .map(|guild| format!("[{}] ", &guild.name))
+                    .unwrap_or_default()
+            } else {
+                String::new()
             };
-            let resp = lp.run_lp(self, ctx, modal, desc).await;
+            let user = &modal.user.name;
+            let name = &modal.data.custom_id;
+            eprintln!("{guild_name}{user}: |>{name}");
+            let start = Instant::now();
+            let resp = self.process_modal(ctx, modal).await;
+            let elapsed = start.elapsed();
+            eprintln!(
+                "{guild_name}{user}: |>{name} -({:.1?})-> {:?}",
+                elapsed, &resp
+            );
             let resp = match resp {
                 Ok(resp) => resp,
                 Err(e) => CommandResponse::Private(e.to_string().into()),
             };
 
             if let Err(why) = modal.respond(&ctx.http, resp, None).await {
-                eprintln!("cannot respond to slash command: {why:?}");
+                eprintln!("cannot respond to modal command: {why:?}");
+            }
+        } else if let Interaction::Component(component) = interaction {
+            // log command
+            let guild_name = if let Some(guild) = component.guild_id {
+                guild
+                    .to_partial_guild(&ctx.http)
+                    .await
+                    .map(|guild| format!("[{}] ", &guild.name))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let user = &component.user.name;
+            let name = &component.data.custom_id;
+            eprintln!("{guild_name}{user}: [>{name}");
+            let start = Instant::now();
+            let resp = self.process_component(ctx, component).await;
+            let elapsed = start.elapsed();
+            eprintln!(
+                "{guild_name}{user}: [>{name} -({:.1?})-> {:?}",
+                elapsed, &resp
+            );
+            let resp = match resp {
+                Ok(resp) => resp,
+                Err(e) => CommandResponse::Private(e.to_string().into()),
+            };
+
+            if let Err(why) = component.respond(&ctx.http, resp, None).await {
+                eprintln!("cannot respond to component command: {why:?}");
             }
         }
     }
+}
+
+// pub trait CommandStorer {
+//     fn register(&mut self, command: CommandConst);
+// }
+//
+// pub trait ModalCommandStorer {
+//     fn register(&mut self, command: ModalCommandConst);
+// }
+//
+// pub trait ComponentCommandStorer {
+//     fn register(&mut self, command: ComponentCommandConst);
+// }
+//
+// pub trait CompletionStorer {
+//     fn register(&mut self, completion: CompletionHandler);
+// }
+
+pub trait TStorer<T> {
+    fn register(&mut self, val: T);
 }
 
 pub struct HandlerBuilder {
@@ -256,6 +335,7 @@ pub struct HandlerBuilder {
     pub management_guild: GuildId,
     pub commands: CommandStore,
     pub modal_commands: ModalCommandStore,
+    pub component_commands: ComponentCommandStore,
     pub modules: ModuleMap,
     pub module_list: Vec<Arc<dyn Module>>,
     pub special_commands: HashMap<String, SpecialCommand>,
@@ -263,6 +343,40 @@ pub struct HandlerBuilder {
     pub default_command_handler: Option<SpecialCommand>,
     pub event_handlers: events::EventHandlers,
 }
+
+impl TStorer<CommandConst> for HandlerBuilder {
+    fn register(&mut self, command: CommandConst) {
+        self.commands.register(command);
+    }
+}
+
+impl TStorer<ModalCommandConst> for HandlerBuilder {
+    fn register(&mut self, command: ModalCommandConst) {
+        self.modal_commands.register(command);
+    }
+}
+
+impl TStorer<ComponentCommandConst> for HandlerBuilder {
+    fn register(&mut self, command: ComponentCommandConst) {
+        self.component_commands.register(command);
+    }
+}
+
+impl TStorer<CompletionHandler> for HandlerBuilder {
+    fn register(&mut self, completion: CompletionHandler) {
+        self.completion_handlers.push(completion);
+    }
+}
+
+pub trait Storer:
+    TStorer<CommandConst>
+    + TStorer<ModalCommandConst>
+    + TStorer<ComponentCommandConst>
+    + TStorer<CompletionHandler>
+{
+}
+
+impl Storer for HandlerBuilder {}
 
 impl HandlerBuilder {
     pub async fn module<M: RegisterableModule>(mut self) -> anyhow::Result<Self> {
@@ -272,11 +386,7 @@ impl HandlerBuilder {
         self = M::add_dependencies(self).await?;
         let mut m = M::init(&self.modules).await?;
         m.setup(&mut self.db).await?;
-        m.register_commands(
-            &mut self.commands,
-            &mut self.modal_commands,
-            &mut self.completion_handlers,
-        );
+        m.register_commands(&mut self);
         let module: Arc<M> = m.into();
         Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
         self.modules.add(Arc::clone(&module));
@@ -290,11 +400,7 @@ impl HandlerBuilder {
         }
         self = M::add_dependencies(self).await?;
         m.setup(&mut self.db).await?;
-        m.register_commands(
-            &mut self.commands,
-            &mut self.modal_commands,
-            &mut self.completion_handlers,
-        );
+        m.register_commands(&mut self);
         let module: Arc<M> = m.into();
         Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
         self.modules.add(Arc::clone(&module));
@@ -313,6 +419,7 @@ impl HandlerBuilder {
             management_guild,
             commands,
             modal_commands,
+            component_commands,
             modules,
             module_list,
             special_commands,
@@ -325,6 +432,7 @@ impl HandlerBuilder {
             management_guild,
             commands: RwLock::new(commands),
             modal_commands: RwLock::new(modal_commands),
+            component_commands: RwLock::new(component_commands),
             http: OnceCell::new(),
             modules,
             module_list,
@@ -342,13 +450,7 @@ pub trait Module: 'static + Send + Sync {
     async fn setup(&mut self, _db: &mut Db) -> anyhow::Result<()> {
         Ok(())
     }
-    fn register_commands(
-        &self,
-        _store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _completion_handlers: &mut CompletionStore,
-    ) {
-    }
+    fn register_commands(&self, _store: &mut dyn Storer) {}
 
     fn register_event_handlers(self: Arc<Self>, _handlers: &mut events::EventHandlers) {}
 
@@ -384,7 +486,7 @@ impl<T: 'static + Send + Sync + Module> TypeMapKey for KeyWrapper<T> {
 
 pub mod prelude {
     pub use super::{
-        CommandConst, CommandStore, CompletionStore, Handler, HandlerBuilder, InteractionExt,
-        ModalCommandStore, Module, ModuleMap, RegisterableModule,
+        CommandConst, CommandStore, CompletionHandler, CompletionStore, Handler, HandlerBuilder,
+        InteractionExt, ModalCommandStore, Module, ModuleMap, RegisterableModule, Storer,
     };
 }

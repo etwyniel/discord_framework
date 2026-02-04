@@ -407,12 +407,7 @@ impl Module for Pinboard {
         Ok(())
     }
 
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _completion_handlers: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(SETPINBOARDWEBHOOK);
         store.register(REGISTER_CHANNEL);
         store.register(UNREGISTER_CHANNEL);

@@ -412,9 +412,7 @@ async fn unlink(
 impl Module for Spotify<ClientCredsSpotify> {
     fn register_commands(
         &self,
-        _store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _: &mut CompletionStore,
+        _: &mut dyn Storer,
     ) {
         // store.register::<Unlink>();
     }
@@ -503,9 +501,7 @@ impl Module for Spotify<AuthCodeSpotify> {
 
     fn register_commands(
         &self,
-        _store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        _: &mut CompletionStore,
+        _: &mut dyn Storer,
     ) {
         // store.register(SPOTIFY_AUTHENTICATE);
     }

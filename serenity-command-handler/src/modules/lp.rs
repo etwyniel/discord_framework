@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::ops::Add;
 
-use crate::RegisterableModule;
-use crate::{CommandStore, HandlerBuilder, Module, db::Db};
+use crate::{ComponentCommandConst, ModalCommandConst, RegisterableModule};
+use crate::{HandlerBuilder, Module, db::Db};
 use anyhow::Context as _;
 use anyhow::bail;
 use chrono::{Duration, prelude::*};
@@ -16,8 +16,9 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
 use serenity::all::{
-    AutoArchiveDuration, AutocompleteChoice, CreateInputText, CreateModal, CreateModalComponent,
-    InputTextStyle,
+    AutoArchiveDuration, AutocompleteChoice, ComponentInteraction, CreateActionRow, CreateButton,
+    CreateComponent, CreateInputText, CreateInteractionResponseFollowup, CreateModal,
+    CreateModalComponent, EditInteractionResponse, InputTextStyle, Member, ModalInteraction,
 };
 use serenity::all::{Channel, RoleId};
 use serenity::all::{CreateAttachment, CreateSelectMenu, CreateSelectMenuKind};
@@ -39,13 +40,15 @@ use serenity::model::channel::ChannelType;
 use serenity::model::id::GuildId;
 use serenity::model::prelude::CommandInteraction;
 use serenity::prelude::Context;
+use tokio::select;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::Receiver;
 
 use crate::album::Album;
 use crate::command_context::{InteractionExt, Responder, get_focused_option, get_str_opt_ac};
 use crate::modules::{Bandcamp, Lastfm, Spotify};
 use crate::prelude::*;
-use serenity_command::{BotCommand, CommandKey};
+use serenity_command::{CommandKey, component_command, modal_command};
 use serenity_command::{CommandResponse, args, command};
 
 use super::{AlbumLookup, Tidal};
@@ -65,7 +68,83 @@ pub struct ResolvedLp {
     pub params: Lp,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+impl ResolvedLp {
+    fn build_message_contents(
+        &mut self,
+        info: &Album,
+        role_id: Option<u64>,
+        desc: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let lp = &self.params;
+        let (when, resolved_start) =
+            convert_lp_time(lp.time.as_deref(), info.duration, self.resolved_start)?;
+        self.resolved_start = resolved_start;
+        let hyperlinked = info.as_linked_header(self.resolved_title.as_deref());
+        let mut resp_content = format!(
+            "{}{SEPARATOR}\n{hyperlinked}\n{SEPARATOR}\n{when}\n",
+            role_id // mention role if set
+                .map(|id| format!("<@&{id}>"))
+                .unwrap_or_else(|| "Listening party: ".to_string()),
+        );
+        let mut add_sep = false;
+        if let Some(duration) = info.duration {
+            add_sep = true;
+            resp_content.push('*');
+            if duration.num_hours() > 0 {
+                _ = write!(&mut resp_content, "{}h", duration.num_hours());
+            }
+            let minutes = duration.num_minutes() % 60;
+            if minutes > 0 {
+                _ = write!(&mut resp_content, "{minutes:02}m");
+            }
+            let seconds = duration.num_seconds();
+            if seconds < 60 {
+                _ = write!(&mut resp_content, "{seconds}s");
+            }
+            resp_content.push('*');
+        }
+        if let Some(release_date) = &info.release_date {
+            if add_sep {
+                resp_content.push_str(" | ");
+            }
+            add_sep = true;
+            _ = write!(&mut resp_content, "__*{release_date}*__");
+        }
+        if let Some(genres) = info.format_genres() {
+            if add_sep {
+                resp_content.push_str(" | ");
+            }
+            _ = write!(&mut resp_content, "{}", &genres);
+        }
+        if let Some(desc) = desc {
+            resp_content.push_str("\n\n");
+            resp_content.push(SEPARATOR);
+            resp_content.push_str(desc);
+            resp_content.push(SEPARATOR);
+        }
+        if !info.has_rich_embed {
+            let track_info = info.format_tracks(Some(10));
+            if !track_info.is_empty() {
+                resp_content.push_str("\n\n");
+                resp_content.push_str(track_info.trim());
+            }
+        }
+        // let resolved = ResolvedLp {
+        //     resolved_start,
+        //     resolved_title: lp_name.map(|s| s.to_string()),
+        //     resolved_link: info.url.clone(),
+        //     params: lp.clone(),
+        // };
+        let encoded_data = serde_urlencoded::ser::to_string(self).unwrap();
+        let mut encoded_data_url = Url::parse(LP_URI).unwrap();
+        encoded_data_url.set_query(Some(&encoded_data));
+        let data: String = encoded_data_url.into();
+        _ = write!(&mut resp_content, "[̣]({data})");
+        Ok(resp_content)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Lp {
     pub album: String,
     pub link: Option<String>,
@@ -160,7 +239,7 @@ async fn get_lastfm_genres(handler: &Handler, info: &Album) -> Option<Vec<String
     }
 }
 
-async fn build_message_contents(
+fn build_message_contents(
     lp: Lp,
     lp_name: Option<&str>,
     info: &Album,
@@ -168,70 +247,14 @@ async fn build_message_contents(
     resolved_start: Option<DateTime<Utc>>,
     desc: Option<&str>,
 ) -> anyhow::Result<String> {
-    let (when, resolved_start) =
-        convert_lp_time(lp.time.as_deref(), info.duration, resolved_start)?;
-    let hyperlinked = info.as_linked_header(lp_name);
-    let mut resp_content = format!(
-        "{}{SEPARATOR}\n{hyperlinked}\n{SEPARATOR}\n{when}\n",
-        role_id // mention role if set
-            .map(|id| format!("<@&{id}>"))
-            .unwrap_or_else(|| "Listening party: ".to_string()),
-    );
-    let mut add_sep = false;
-    if let Some(duration) = info.duration {
-        add_sep = true;
-        resp_content.push('*');
-        if duration.num_hours() > 0 {
-            _ = write!(&mut resp_content, "{}h", duration.num_hours());
-        }
-        let minutes = duration.num_minutes() % 60;
-        if minutes > 0 {
-            _ = write!(&mut resp_content, "{minutes:02}m");
-        }
-        let seconds = duration.num_seconds();
-        if seconds < 60 {
-            _ = write!(&mut resp_content, "{seconds}s");
-        }
-        resp_content.push('*');
-    }
-    if let Some(release_date) = &info.release_date {
-        if add_sep {
-            resp_content.push_str(" | ");
-        }
-        add_sep = true;
-        _ = write!(&mut resp_content, "__*{release_date}*__");
-    }
-    if let Some(genres) = info.format_genres() {
-        if add_sep {
-            resp_content.push_str(" | ");
-        }
-        _ = write!(&mut resp_content, "{}", &genres);
-    }
-    if let Some(desc) = desc {
-        resp_content.push_str("\n\n");
-        resp_content.push(SEPARATOR);
-        resp_content.push_str(desc);
-        resp_content.push(SEPARATOR);
-    }
-    if !info.has_rich_embed {
-        let track_info = info.format_tracks(Some(10));
-        if !track_info.is_empty() {
-            resp_content.push_str("\n\n");
-            resp_content.push_str(track_info.trim());
-        }
-    }
-    let resolved = ResolvedLp {
+    let (_, resolved_start) = convert_lp_time(lp.time.as_deref(), info.duration, resolved_start)?;
+    let mut resolved = ResolvedLp {
         resolved_start,
         resolved_title: lp_name.map(|s| s.to_string()),
         resolved_link: info.url.clone(),
         params: lp,
     };
-    let encoded_data = serde_urlencoded::ser::to_string(resolved).unwrap();
-    let mut encoded_data_url = Url::parse(LP_URI).unwrap();
-    encoded_data_url.set_query(Some(&encoded_data));
-    let data: String = encoded_data_url.into();
-    _ = write!(&mut resp_content, "[̣]({data})");
-    Ok(resp_content)
+    resolved.build_message_contents(info, role_id, desc)
 }
 
 async fn find_album<'a>(
@@ -270,6 +293,47 @@ async fn find_album<'a>(
 }
 
 impl Lp {
+    async fn resolve(
+        mut self,
+        handler: &Handler,
+        guild_id: GuildId,
+    ) -> anyhow::Result<(ResolvedLp, Album)> {
+        let Lp {
+            album,
+            link,
+            provider,
+            role,
+            ..
+        } = &self;
+        let album = album.trim();
+        let link = link.as_deref().map(str::trim);
+        let (lp_name, mut info) = find_album(handler, album, link, provider.as_deref()).await?;
+        let lp_name = lp_name.map(|s| s.to_string());
+        // get genres if needed
+        if let Some(genres) = get_lastfm_genres(handler, &info).await {
+            info.genres = genres
+        }
+        let role_id = if let Some(r) = role {
+            *r
+        } else {
+            RoleId::new(
+                handler
+                    .get_guild_field(guild_id.get(), "role_id")
+                    .await
+                    .context("error retrieving LP role")?,
+            )
+        };
+        self.role = Some(role_id);
+        let (_, resolved_start) = convert_lp_time(self.time.as_deref(), info.duration, None)?;
+        let resolved = ResolvedLp {
+            resolved_start,
+            resolved_title: lp_name.map(|s| s.to_string()),
+            resolved_link: info.url.clone(),
+            params: self,
+        };
+        Ok((resolved, info))
+    }
+
     async fn build_contents(
         self,
         handler: &Handler,
@@ -305,8 +369,7 @@ impl Lp {
             role_id,
             resolved_start,
             desc,
-        )
-        .await?;
+        )?;
         Ok((resp_content, role_id, info))
     }
 
@@ -481,32 +544,6 @@ async fn lp_func(
         role,
     };
     params.run_lp(handler, ctx, command, None).await
-}
-
-#[async_trait]
-impl BotCommand for Lp {
-    type Data = Handler;
-    async fn run(
-        self,
-        handler: &Handler,
-        ctx: &Context,
-        command: &CommandInteraction,
-    ) -> anyhow::Result<CommandResponse> {
-        self.run_lp(handler, ctx, command, None).await
-    }
-
-    fn setup_options(
-        opt_name: &str,
-        opt: CreateCommandOption<'static>,
-    ) -> CreateCommandOption<'static> {
-        if opt_name == "provider" {
-            opt.add_string_choice("spotify", "spotify")
-                .add_string_choice("bandcamp", "bandcamp")
-                .add_string_choice("tidal", "tidal")
-        } else {
-            opt
-        }
-    }
 }
 
 args!(SETCREATETHREADS_ARGS =
@@ -783,24 +820,24 @@ async fn create_lp(
         CreateModalComponent::Label(description_field),
         CreateModalComponent::Label(time_field),
     ];
-    if let Some(member) = &command.member
-        && member
-            .permissions
-            .unwrap_or_default()
-            .contains(Permissions::MENTION_EVERYONE)
-    {
-        let default_roles = handler
-            .get_guild_field(command.guild_id()?.get(), "role_id")
-            .await
-            .map(|r| Cow::Owned(vec![RoleId::new(r)]))
-            .ok();
-        let role_field = CreateLabel::select_menu(
-            "Role",
-            CreateSelectMenu::new("role", CreateSelectMenuKind::Role { default_roles })
-                .max_values(1),
-        );
-        fields.push(CreateModalComponent::Label(role_field));
-    }
+    // if let Some(member) = &command.member
+    //     && member
+    //         .permissions
+    //         .unwrap_or_default()
+    //         .contains(Permissions::MENTION_EVERYONE)
+    // {
+    //     let default_roles = handler
+    //         .get_guild_field(command.guild_id()?.get(), "role_id")
+    //         .await
+    //         .map(|r| Cow::Owned(vec![RoleId::new(r)]))
+    //         .ok();
+    //     let role_field = CreateLabel::select_menu(
+    //         "Role",
+    //         CreateSelectMenu::new("role", CreateSelectMenuKind::Role { default_roles })
+    //             .max_values(1),
+    //     );
+    //     fields.push(CreateModalComponent::Label(role_field));
+    // }
     command
         .create_response(
             &ctx.http,
@@ -809,6 +846,233 @@ async fn create_lp(
             ),
         )
         .await?;
+    Ok(CommandResponse::None)
+}
+
+fn listening_party_creator_components(
+    member: Option<&Member>,
+    role_id: Option<RoleId>,
+) -> anyhow::Result<Vec<CreateComponent<'static>>> {
+    let mut message_components = vec![];
+
+    if let Some(member) = member
+        && member
+            .permissions
+            .unwrap_or_default()
+            .contains(Permissions::MENTION_EVERYONE)
+    {
+        let role_field = CreateSelectMenu::new(
+            "change_listening_party_role",
+            CreateSelectMenuKind::Role {
+                default_roles: role_id.map(|role| Cow::Owned(vec![role])),
+            },
+        )
+        .max_values(1);
+        message_components.push(CreateComponent::ActionRow(CreateActionRow::SelectMenu(
+            role_field,
+        )));
+    }
+    message_components.push(CreateComponent::ActionRow(CreateActionRow::buttons(vec![
+        CreateButton::new("edit_listening_party")
+            .emoji('✏')
+            .label("Edit"),
+        CreateButton::new("start_listening_party")
+            .emoji('▶')
+            .label("Start"),
+    ])));
+    Ok(message_components)
+}
+
+struct LpCreator {
+    lp: ResolvedLp,
+    info: Album,
+    desc: Option<String>,
+}
+
+enum LpCreationEvent {
+    ChangeRole(RoleId),
+}
+
+impl LpCreator {
+    fn build_contents(&mut self) -> anyhow::Result<String> {
+        self.lp.build_message_contents(
+            &self.info,
+            self.lp.params.role.map(RoleId::get),
+            self.desc.as_deref(),
+        )
+    }
+
+    async fn run(
+        &mut self,
+        handler: &Handler,
+        ctx: &Context,
+        modal: &ModalInteraction,
+        mut receiver: Receiver<LpCreationEvent>,
+    ) {
+        use LpCreationEvent::*;
+        while let Some(evt) = receiver.recv().await {
+            match evt {
+                ChangeRole(new_role) => {
+                    self.lp.params.role = Some(new_role);
+                    let contents = self.build_contents().unwrap();
+                    modal
+                        .edit_response(&ctx.http, EditInteractionResponse::new().content(contents))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+    }
+}
+
+args!(LISTENING_PARTY_ARGS =
+    album: String,
+    link: Option<String>,
+    description: Option<String>,
+    time: Option<String>,
+    role: Option<RoleId>,
+);
+
+const CREATE_LISTENING_PARTY: ModalCommandConst =
+    modal_command!(create_lp LISTENING_PARTY_ARGS: create_listening_party);
+
+async fn create_listening_party(
+    (album, link, description, time, role): LISTENING_PARTY_ARGS,
+    handler: &Handler,
+    ctx: &Context,
+    modal: &ModalInteraction,
+) -> anyhow::Result<CommandResponse> {
+    let lp = Lp {
+        album,
+        link,
+        time,
+        provider: None,
+        role,
+    };
+    let guild_id = modal.guild_id()?;
+    let (mut resolved, info) = lp.resolve(handler, guild_id).await?;
+    let contents = resolved
+        .build_message_contents(
+            &info,
+            resolved.params.role.map(RoleId::get),
+            description.as_deref(),
+        )
+        // .build_contents(handler, modal, None, description.as_deref())
+        ?;
+    let default_role = handler
+        .get_guild_field(modal.guild_id()?.get(), "role_id")
+        .await
+        .map(|r| RoleId::new(r))
+        .ok();
+    let message_components =
+        listening_party_creator_components(modal.member.as_ref(), default_role)?;
+    let mod_lp: &ModLp = handler.module()?;
+    modal
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content(contents)
+                    .components(message_components),
+            ),
+        )
+        .await?;
+    let resp = modal.get_response(&ctx.http).await?;
+    let receiver = {
+        let (sender, receiver) = tokio::sync::mpsc::channel::<LpCreationEvent>(5);
+        mod_lp
+            .lp_creation_events
+            .write()
+            .await
+            .insert(resp.id, sender);
+        receiver
+    };
+    let mut creator = LpCreator {
+        lp: resolved,
+        info,
+        desc: description,
+    };
+    let fut = creator.run(handler, ctx, modal, receiver);
+    _ = tokio::time::timeout(std::time::Duration::from_mins(10), fut).await;
+    {
+        mod_lp.lp_creation_events.write().await.remove(&resp.id);
+    }
+    Ok(CommandResponse::None)
+}
+
+args!(CHANGE_LP_ROLE_ARGS = role: RoleId);
+
+const CHANGE_LP_ROLE: ComponentCommandConst =
+    component_command!(change_listening_party_role CHANGE_LP_ROLE_ARGS: change_lp_role);
+
+async fn change_lp_role(
+    (role,): CHANGE_LP_ROLE_ARGS,
+    handler: &Handler,
+    ctx: &Context,
+    component: &ComponentInteraction,
+) -> anyhow::Result<CommandResponse> {
+    dbg!(&component.token);
+    let mod_lp: &ModLp = handler.module()?;
+    if let Some(sender) = mod_lp
+        .lp_creation_events
+        .read()
+        .await
+        .get(&component.message.id)
+    {
+        sender.send(LpCreationEvent::ChangeRole(role)).await?;
+    } else {
+        bail!("Message not found");
+    }
+    component
+        .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+        .await?;
+    return Ok(CommandResponse::None);
+    // clone message to be able to edit it
+    let mut msg = component.message.clone();
+    dbg!(msg.id);
+    let Some(pos) = msg.content.find(LP_URI) else {
+        // only support editing from embedded data
+        bail!("no embedded data");
+    };
+    let url: Url = msg.content[pos..]
+        .trim_end_matches(')')
+        .parse()
+        .context("invalid embedded URL")?;
+    let mut lp: ResolvedLp = serde_urlencoded::de::from_str(url.query().unwrap_or_default())
+        .context("failed to deserialize embedded data")?;
+
+    // update role
+    lp.params.role = Some(role);
+
+    // fetch potential description
+    let desc = msg.content.split(SEPARATOR).nth(3);
+    let (content, _, _) = lp
+        .params
+        .build_contents(handler, component, lp.resolved_start, desc)
+        .await?;
+
+    component
+        .edit_response(&ctx.http, EditInteractionResponse::new().content(content))
+        .await?;
+    // let message_components =
+    //     listening_party_creator_components(component.member.as_ref(), Some(role))?;
+    // dbg!(&message_components);
+    // component
+    //     .create_response(
+    //         &ctx.http,
+    //         CreateInteractionResponse::Message(
+    //             CreateInteractionResponseMessage::new()
+    //                 .ephemeral(true)
+    //                 .content(content)
+    //                 .components(message_components),
+    //         ),
+    //     )
+    //     .await?;
+    // component
+    //     .edit_response(&ctx.http, EditInteractionResponse::new().content(content))
+    //     // msg.edit(&ctx.http, EditMessage::new().content(content))
+    //     .await?;
     Ok(CommandResponse::None)
 }
 
@@ -927,6 +1191,7 @@ async fn edit_listening_party(
 #[derive(Default)]
 pub struct ModLp {
     lp_messages: RwLock<HashMap<GenericChannelId, (MessageId, UserId)>>,
+    lp_creation_events: RwLock<HashMap<MessageId, tokio::sync::mpsc::Sender<LpCreationEvent>>>,
 }
 
 impl ModLp {
@@ -1004,12 +1269,7 @@ impl Module for ModLp {
         Ok(())
     }
 
-    fn register_commands(
-        &self,
-        store: &mut CommandStore,
-        _modal_store: &mut ModalCommandStore,
-        completions: &mut CompletionStore,
-    ) {
+    fn register_commands(&self, store: &mut dyn Storer) {
         store.register(LP);
         store.register(SETROLE);
         store.register(SETCREATETHREADS);
@@ -1017,7 +1277,9 @@ impl Module for ModLp {
         store.register(EDIT_LP);
         store.register(CREATE_LP);
         store.register(EDIT_LISTENING_PARTY);
-        completions.push(ModLp::complete_lp);
+        store.register(CREATE_LISTENING_PARTY);
+        store.register(CHANGE_LP_ROLE);
+        store.register(ModLp::complete_lp as CompletionHandler);
     }
 }
 
