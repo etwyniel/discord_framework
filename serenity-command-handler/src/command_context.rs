@@ -1,8 +1,8 @@
 use anyhow::anyhow;
 use serenity::{
     all::{
-        ComponentInteraction, CreateAttachment, GenericChannelId, GuildId, Label, LabelComponent,
-        Member, ModalComponent, ModalInteraction, RoleId, User,
+        ComponentInteraction, CreateAttachment, GenericChannelId, GuildId, InteractionId, Label,
+        LabelComponent, Member, ModalComponent, ModalInteraction, RoleId, User,
     },
     async_trait,
     builder::{CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage},
@@ -15,10 +15,51 @@ use serenity::{
 
 use serenity_command::{CommandResponse, ContentAndFlags};
 
+pub type InteractionHandle<'a> = (InteractionId, &'a str);
+
+pub async fn create_response_with_token(
+    http: &Http,
+    contents: CommandResponse,
+    role_id: Option<u64>,
+    interaction_id: InteractionId,
+    interaction_token: &str,
+) -> anyhow::Result<Option<Message>> {
+    let ContentAndFlags(contents, embeds, attachments, flags) =
+        match contents.to_contents_and_flags() {
+            None => return Ok(None),
+            Some(c) => c,
+        };
+    let mut msg = CreateInteractionResponseMessage::new();
+    msg = embeds
+        .into_iter()
+        .flatten()
+        .fold(msg, |msg, embed| msg.add_embed(embed));
+    let roles = if let Some(r) = role_id {
+        vec![RoleId::new(r)]
+    } else {
+        Vec::new()
+    };
+    msg = msg
+        .content(&contents)
+        .flags(flags)
+        .allowed_mentions(CreateAllowedMentions::new().roles(roles));
+    for (url, filename) in attachments.into_iter().flatten() {
+        msg = msg.add_file(CreateAttachment::url(http, url, filename).await?);
+    }
+    CreateInteractionResponse::Message(msg)
+        .execute(http, interaction_id, interaction_token)
+        .await?;
+    http.get_original_interaction_response(interaction_token)
+        .await
+        .map_err(anyhow::Error::from)
+        .map(Some)
+}
+
 #[async_trait]
 pub trait InteractionExt {
     fn channel_id(&self) -> GenericChannelId;
     fn guild_id(&self) -> anyhow::Result<GuildId>;
+    fn handle(&self) -> InteractionHandle<'_>;
 
     fn user(&self) -> &User;
 
@@ -42,6 +83,10 @@ impl InteractionExt for &CommandInteraction {
     fn guild_id(&self) -> anyhow::Result<GuildId> {
         self.guild_id
             .ok_or_else(|| anyhow!("Must be run in a server"))
+    }
+
+    fn handle(&self) -> InteractionHandle<'_> {
+        (self.id, &self.token)
     }
 
     fn user(&self) -> &User {
@@ -76,6 +121,10 @@ impl InteractionExt for ModalInteraction {
             .ok_or_else(|| anyhow!("Must be run in a server"))
     }
 
+    fn handle(&self) -> InteractionHandle<'_> {
+        (self.id, &self.token)
+    }
+
     fn user(&self) -> &User {
         &self.user
     }
@@ -108,6 +157,10 @@ impl InteractionExt for ComponentInteraction {
             .ok_or_else(|| anyhow!("Must be run in a server"))
     }
 
+    fn handle(&self) -> InteractionHandle<'_> {
+        (self.id, &self.token)
+    }
+
     fn user(&self) -> &User {
         &self.user
     }
@@ -137,6 +190,10 @@ impl<T: InteractionExt + Sync> InteractionExt for &T {
 
     fn guild_id(&self) -> anyhow::Result<GuildId> {
         (*self).guild_id()
+    }
+
+    fn handle(&self) -> InteractionHandle<'_> {
+        (*self).handle()
     }
 
     fn user(&self) -> &User {

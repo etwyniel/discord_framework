@@ -41,6 +41,7 @@ impl<T: Into<String>> From<(T, Vec<CreateEmbed<'static>>)> for ResponseType {
 #[derive(Debug)]
 pub enum CommandResponse {
     None,
+    Ack,
     Public(ResponseType),
     Private(ResponseType),
 }
@@ -70,9 +71,11 @@ pub struct ContentAndFlags(
 );
 
 impl CommandResponse {
+    pub const ACK: anyhow::Result<Self> = Ok(CommandResponse::Ack);
+
     pub fn to_contents_and_flags(self) -> Option<ContentAndFlags> {
         Some(match self {
-            CommandResponse::None => return None,
+            CommandResponse::None | CommandResponse::Ack => return None,
             CommandResponse::Public(resp) => {
                 let (text, embeds, attachments) = resp.to_content();
                 ContentAndFlags(

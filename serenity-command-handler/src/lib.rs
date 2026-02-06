@@ -1,11 +1,12 @@
 use std::fmt::Write;
+use std::sync::Weak;
 use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Instant};
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context as _, anyhow, bail};
 use bot_management::ModManagement;
 use rusqlite::Connection;
 pub use serenity; // re-export
-use serenity::all::{ComponentInteraction, ModalInteraction};
+use serenity::all::{ComponentInteraction, CreateInteractionResponse, ModalInteraction};
 use serenity::model::prelude::{GuildId, UserId};
 use serenity::{
     async_trait,
@@ -111,6 +112,7 @@ impl InteractionExt for CommandInteraction {
 }
 
 pub struct Handler {
+    pub me: Weak<Self>,
     pub db: Arc<Mutex<Db>>,
     pub management_guild: GuildId,
     pub commands: RwLock<CommandStore>,
@@ -179,7 +181,12 @@ impl Handler {
         ctx: &Context,
         modal: &ModalInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let name = modal.data.custom_id.as_str();
+        let name = modal
+            .data
+            .custom_id
+            .split('.')
+            .next()
+            .context("empty component custom_id")?;
         if let Some(command) = self.modal_commands.read().await.0.get(name) {
             (command.run)(self, ctx, modal).await
         } else {
@@ -192,7 +199,12 @@ impl Handler {
         ctx: &Context,
         component: &ComponentInteraction,
     ) -> anyhow::Result<CommandResponse> {
-        let name = component.data.custom_id.as_str();
+        let name = component
+            .data
+            .custom_id
+            .split('.')
+            .next()
+            .context("empty component custom_id")?;
         if let Some(command) = self.component_commands.read().await.0.get(name) {
             (command.run)(self, ctx, component).await
         } else {
@@ -270,6 +282,12 @@ impl Handler {
                 elapsed, &resp
             );
             let resp = match resp {
+                Ok(CommandResponse::Ack) => {
+                    _ = modal
+                        .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+                        .await;
+                    return;
+                }
                 Ok(resp) => resp,
                 Err(e) => CommandResponse::Private(e.to_string().into()),
             };
@@ -299,6 +317,12 @@ impl Handler {
                 elapsed, &resp
             );
             let resp = match resp {
+                Ok(CommandResponse::Ack) => {
+                    _ = component
+                        .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+                        .await;
+                    return;
+                }
                 Ok(resp) => resp,
                 Err(e) => CommandResponse::Private(e.to_string().into()),
             };
@@ -413,7 +437,7 @@ impl HandlerBuilder {
         self
     }
 
-    pub fn build(self) -> Handler {
+    pub fn build(self) -> Arc<Handler> {
         let HandlerBuilder {
             db,
             management_guild,
@@ -427,7 +451,8 @@ impl HandlerBuilder {
             default_command_handler,
             event_handlers,
         } = self;
-        Handler {
+        Arc::new_cyclic(|me| Handler {
+            me: me.clone(),
             db: Arc::new(Mutex::new(db)),
             management_guild,
             commands: RwLock::new(commands),
@@ -441,7 +466,7 @@ impl HandlerBuilder {
             default_command_handler,
             self_id: OnceCell::default(),
             event_handlers: Arc::new(event_handlers),
-        }
+        })
     }
 }
 
