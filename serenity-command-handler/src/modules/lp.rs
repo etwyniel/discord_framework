@@ -2,9 +2,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::ops::Add;
-use std::sync::Arc;
 
-use crate::{ComponentCommandConst, ModalCommandConst, RegisterableModule};
+use crate::RegisterableModule;
 use crate::{HandlerBuilder, Module, db::Db};
 use anyhow::{Context as _, bail};
 use chrono::{Duration, prelude::*};
@@ -18,31 +17,31 @@ use serde::Serialize;
 use serenity::async_trait;
 use serenity::prelude::Context;
 use tokio::sync::RwLock;
-use tokio::sync::mpsc::Receiver;
 
 use serenity::all::{
     AutoArchiveDuration, AutocompleteChoice, Channel, ChannelType, CommandDataOption,
-    CommandInteraction, CommandType, ComponentInteraction, CreateActionRow, CreateAllowedMentions,
-    CreateAttachment, CreateAutocompleteResponse, CreateButton, CreateCommandOption,
-    CreateComponent, CreateInputText, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, CreateLabel, CreateModal, CreateModalComponent,
-    CreateSelectMenu, CreateSelectMenuKind, CreateThread, EditInteractionResponse, EditMessage,
-    EditThread, ExecuteWebhook, GenericChannelId, GuildId, Http, InputTextStyle, InteractionId,
-    Member, Message, MessageCommandInteractionMetadata, MessageId, MessageInteractionMetadata,
-    ModalInteraction, Permissions, RoleId, UserId,
+    CommandInteraction, CommandType, CreateAllowedMentions, CreateAttachment,
+    CreateAutocompleteResponse, CreateCommandOption, CreateInputText, CreateInteractionResponse,
+    CreateInteractionResponseFollowup, CreateInteractionResponseMessage, CreateLabel, CreateModal,
+    CreateModalComponent, CreateThread, EditMessage, EditThread, ExecuteWebhook, GenericChannelId,
+    GuildId, Http, InputTextStyle, InteractionId, Member, Message, MessageId, RoleId, UserId,
+    Webhook,
 };
 
 use crate::album::Album;
 use crate::command_context::{
-    InteractionExt, InteractionHandle, Responder, create_response_with_token, get_focused_option,
-    get_str_opt_ac,
+    InteractionExt, InteractionInfo, Responder, create_response_with_token,
+    get_focused_option, get_str_opt_ac,
 };
 use crate::modules::{Bandcamp, Lastfm, Spotify};
 use crate::prelude::*;
-use serenity_command::{CommandKey, ContentAndFlags, component_command, modal_command};
+use serenity_command::{CommandKey, ContentAndFlags};
 use serenity_command::{CommandResponse, args, command};
 
 use super::{AlbumLookup, Tidal};
+
+mod config;
+mod lp_creator;
 
 const SEPARATOR: char = '\u{200B}';
 const LP_URI: &str = "http://lp";
@@ -97,21 +96,13 @@ impl ResolvedLp {
                 .map(|id| format!("<@&{id}>"))
                 .unwrap_or_else(|| "Listening party: ".to_string()),
         );
+
+        // add album info
         let mut add_sep = false;
-        if let Some(duration) = info.duration {
+        if let Some(duration) = info.format_duration() {
             add_sep = true;
-            resp_content.push('*');
-            if duration.num_hours() > 0 {
-                _ = write!(&mut resp_content, "{}h", duration.num_hours());
-            }
-            let minutes = duration.num_minutes() % 60;
-            if minutes > 0 {
-                _ = write!(&mut resp_content, "{minutes:02}m");
-            }
-            let seconds = duration.num_seconds();
-            if seconds < 60 {
-                _ = write!(&mut resp_content, "{seconds}s");
-            }
+            resp_content.push('*'); // italicize
+            resp_content.push_str(&duration);
             resp_content.push('*');
         }
         if let Some(release_date) = &info.release_date {
@@ -119,7 +110,7 @@ impl ResolvedLp {
                 resp_content.push_str(" | ");
             }
             add_sep = true;
-            _ = write!(&mut resp_content, "__*{release_date}*__");
+            _ = write!(&mut resp_content, "__*{release_date}*__"); // underline and italicize
         }
         if let Some(genres) = info.format_genres() {
             if add_sep {
@@ -129,22 +120,27 @@ impl ResolvedLp {
         }
         if let Some(desc) = desc {
             resp_content.push_str("\n\n");
+            // add separator so description can be retrieved easily when editing LP
             resp_content.push(SEPARATOR);
             resp_content.push_str(desc);
             resp_content.push(SEPARATOR);
         }
         if !info.has_rich_embed {
-            let track_info = info.format_tracks(Some(10));
+            // album source has no rich embed showing a track list,
+            // add those ourselves
+            let track_info = info.format_tracks(Some(10)); // show up to the first 10 tracks
             if !track_info.is_empty() {
                 resp_content.push_str("\n\n");
                 resp_content.push_str(track_info.trim());
             }
         }
+        // encode resolved LP as a URL to hide in the LP message
+        // can be retrieved later when editing
         let encoded_data = serde_urlencoded::ser::to_string(self).unwrap();
         let mut encoded_data_url = Url::parse(LP_URI).unwrap();
         encoded_data_url.set_query(Some(&encoded_data));
         let data: String = encoded_data_url.into();
-        _ = write!(&mut resp_content, "[̣]({data})");
+        _ = write!(&mut resp_content, "[̣]({data})"); // hyperlink on a barely visible character
         Ok(resp_content)
     }
 }
@@ -372,33 +368,23 @@ impl Lp {
         Ok((resp_content, role_id, info))
     }
 
-    pub async fn send(
-        handler: &Handler,
+    // Send LP message through webhook
+    // This lets us impersonate the user who sent the command,
+    // displaying their username and avatar
+    async fn send_message_webhook(
+        wh: &Webhook,
+        http: &Http,
         member: &Member,
-        lp: &ResolvedLp,
-        info: &Album,
         resp_content: &str,
-        (interaction_id, interaction_token): InteractionHandle<'_>,
-        is_followup: bool,
-        channel_id: GenericChannelId,
-    ) -> anyhow::Result<CommandResponse> {
-        let http = handler.http.get().unwrap();
-        let guild_id = member.guild_id;
-        let webhook: Option<String> = handler.get_guild_field(guild_id.get(), "webhook").await?;
-        let wh = match webhook.as_deref().map(|url| http.get_webhook_from_url(url)) {
-            Some(fut) => Some(fut.await?),
-            None => None,
-        };
-        let roles: Vec<_> = lp.params.role.clone().into_iter().collect();
-        let message = if let Some(wh) = &wh {
-            // Send LP message through webhook
-            // This lets us impersonate the user who sent the command
-            let avatar_url = member.avatar_url().or_else(|| member.user.avatar_url());
-            let nick = member
-                .nick
-                .as_deref()
-                .unwrap_or_else(|| member.user.display_name());
-            wh.execute(http, true, {
+        roles: Vec<RoleId>,
+    ) -> anyhow::Result<Message> {
+        let avatar_url = member.avatar_url().or_else(|| member.user.avatar_url());
+        let nick = member
+            .nick
+            .as_deref()
+            .unwrap_or_else(|| member.user.display_name());
+        let msg = wh
+            .execute(http, true, {
                 let mut webhook = ExecuteWebhook::new()
                     .content(resp_content)
                     .allowed_mentions(CreateAllowedMentions::new().roles(roles))
@@ -409,87 +395,151 @@ impl Lp {
                 webhook
             })
             .await?
-            .unwrap() // Message is present because we set wait to true in execute
+            .unwrap(); // Message is present because we set wait to true in execute
+        Ok(msg)
+    }
+
+    async fn send_message_interaction(
+        http: &Http,
+        interaction: &InteractionInfo<'_>,
+        resp_content: &str,
+        roles: Vec<RoleId>,
+        info: &Album,
+        is_followup: bool,
+    ) -> anyhow::Result<Message> {
+        // prefix response with pinger mention
+        let resp = format!("<@{}>: {resp_content}", interaction.member.user.id.get());
+        // Create interaction response
+        let allowed_mentions = CreateAllowedMentions::new().roles(roles);
+        let cover_attachment = if let Some(cover) = &info.cover
+            && !info.has_rich_embed
+        {
+            Some(CreateAttachment::url(http, cover, "cover.jpg").await?)
         } else {
-            // prefix response with pinger mention
-            let resp = format!("<@{}>: {resp_content}", member.user.id.get());
-            // Create interaction response
-            let allowed_mentions = CreateAllowedMentions::new().roles(roles);
-            if is_followup {
-                let mut create_followup = CreateInteractionResponseFollowup::new()
-                    .content(resp)
-                    .allowed_mentions(allowed_mentions);
-                if let Some(cover) = &info.cover
-                    && !info.has_rich_embed
-                {
-                    let file = CreateAttachment::url(http, cover, "cover.jpg").await?;
-                    create_followup = create_followup.add_file(file);
-                }
-                create_followup
-                    .execute(http, None, interaction_token)
-                    .await?
-            } else {
-                let mut create_msg = CreateInteractionResponseMessage::new()
-                    .content(resp)
-                    .allowed_mentions(allowed_mentions);
-                if let Some(cover) = &info.cover
-                    && !info.has_rich_embed
-                {
-                    let file = CreateAttachment::url(http, cover, "cover.jpg").await?;
-                    create_msg = create_msg.add_file(file);
-                }
-                CreateInteractionResponse::Message(create_msg)
-                    .execute(http, interaction_id, interaction_token)
-                    .await?;
-                http.get_original_interaction_response(interaction_token)
-                    .await?
+            None
+        };
+
+        let msg = if is_followup {
+            // need to send this message as a followup to an existing interaction response
+            let mut create_followup = CreateInteractionResponseFollowup::new()
+                .content(resp)
+                .allowed_mentions(allowed_mentions);
+            if let Some(att) = cover_attachment {
+                create_followup = create_followup.add_file(att)
             }
+            create_followup
+                .execute(http, None, interaction.token)
+                .await?
+        } else {
+            let mut create_msg = CreateInteractionResponseMessage::new()
+                .content(resp)
+                .allowed_mentions(allowed_mentions);
+            if let Some(att) = cover_attachment {
+                create_msg = create_msg.add_file(att)
+            }
+            CreateInteractionResponse::Message(create_msg)
+                .execute(http, interaction.id, interaction.token)
+                .await?;
+            http.get_original_interaction_response(interaction.token)
+                .await?
+        };
+        Ok(msg)
+    }
+
+    pub async fn create_thread(
+        handler: &Handler,
+        http: &Http,
+        message: &Message,
+        info: &Album,
+        guild_id: GuildId,
+        webhook: Option<&str>,
+    ) -> anyhow::Result<Option<String>> {
+        if !handler
+            .get_guild_field(guild_id.get(), "create_threads")
+            .await?
+        {
+            return Ok(None);
+        }
+        // Create a thread from the response message for the LP to take place in
+        let mut chan = message.channel(http).await?;
+        let mut thread_name = info.name.as_deref().unwrap_or("Listening party");
+        if thread_name.len() > 100 {
+            thread_name = &thread_name[..100];
+        }
+        let mut response = None;
+        // let mut guild_chan = chan.guild().map(|c| (c.kind, c));
+        if let (None, Channel::GuildThread(thread)) = (&webhook, &mut chan) {
+            // If we're already in a thread, just rename it
+            // unless we are using a webhook, in which case we can create a new thread
+            thread
+                .edit(http, EditThread::new().name(thread_name))
+                .await?;
+        } else if let Channel::Guild(channel) = &chan {
+            // Create thread from response message
+            let thread = channel
+                .id
+                .create_thread_from_message(
+                    http,
+                    message.id,
+                    CreateThread::new(thread_name)
+                        .kind(ChannelType::PublicThread)
+                        .auto_archive_duration(AutoArchiveDuration::OneHour),
+                )
+                .await?;
+            response = Some(format!("LP created: <#{}>", thread.id.get()));
+        }
+        Ok(response)
+    }
+
+    pub async fn send(
+        handler: &Handler,
+        lp: &ResolvedLp,
+        interaction: &InteractionInfo<'_>,
+        info: &Album,
+        resp_content: &str,
+        is_followup: bool,
+    ) -> anyhow::Result<CommandResponse> {
+        let http = handler.http.get().unwrap();
+        let guild_id = interaction.guild_id;
+        let webhook: Option<String> = handler.get_guild_field(guild_id.get(), "webhook").await?;
+        let wh = match webhook.as_deref().map(|url| http.get_webhook_from_url(url)) {
+            Some(fut) => Some(fut.await?),
+            None => None,
+        };
+        let roles: Vec<_> = lp.params.role.into_iter().collect();
+        let message = if let Some(wh) = &wh {
+            // Send LP message through webhook
+            // This lets us impersonate the user who sent the command
+            Self::send_message_webhook(wh, http, interaction.member, resp_content, roles).await?
+        } else {
+            Self::send_message_interaction(
+                http,
+                interaction,
+                resp_content,
+                roles,
+                info,
+                is_followup,
+            )
+            .await?
         };
         let mod_lp: &ModLp = handler.module().unwrap();
-        mod_lp
-            .lp_messages
-            .write()
-            .await
-            .insert(channel_id, (message.id, member.user.id));
+        mod_lp.lp_messages.write().await.insert(
+            interaction.channel_id,
+            (message.id, interaction.member.user.id),
+        );
         let mut response = format!(
             "LP created: {}",
             message.id.link(message.channel_id, Some(guild_id))
         );
-        if handler
-            .get_guild_field(guild_id.get(), "create_threads")
-            .await?
+        if let Some(r) =
+            Self::create_thread(handler, http, &message, info, guild_id, webhook.as_deref()).await?
         {
-            // Create a thread from the response message for the LP to take place in
-            let mut chan = message.channel(http).await?;
-            let mut thread_name = info.name.as_deref().unwrap_or("Listening party");
-            if thread_name.len() > 100 {
-                thread_name = &thread_name[..100];
-            }
-            // let mut guild_chan = chan.guild().map(|c| (c.kind, c));
-            if let (None, Channel::GuildThread(thread)) = (&webhook, &mut chan) {
-                // If we're already in a thread, just rename it
-                // unless we are using a webhook, in which case we can create a new thread
-                thread
-                    .edit(http, EditThread::new().name(thread_name))
-                    .await?;
-            } else if let Channel::Guild(channel) = &chan {
-                // Create thread from response message
-                let thread = channel
-                    .id
-                    .create_thread_from_message(
-                        http,
-                        message.id,
-                        CreateThread::new(thread_name)
-                            .kind(ChannelType::PublicThread)
-                            .auto_archive_duration(AutoArchiveDuration::OneHour),
-                    )
-                    .await?;
-                response = format!("LP created: <#{}>", thread.id.get());
-            }
+            response = r;
         }
         if let Some(wh) = wh {
             // If we used a webhook, we still need to create the interaction response
-            let response = if wh.channel_id.map(|id| id.get()) == Some(channel_id.get()) {
+            let response = if wh.channel_id.map(|id| id.get()) == Some(interaction.channel_id.get())
+            {
                 CommandResponse::Private(response.into())
             } else {
                 CommandResponse::Public(response.into())
@@ -502,13 +552,11 @@ impl Lp {
                         .content(contents)
                         .add_embeds(embeds.into_iter().flatten())
                         .flags(flags)
-                        .execute(http, None, interaction_token)
+                        .execute(http, None, interaction.token)
                         .await?;
-                } else {
-                    // FIXME
                 }
             } else {
-                create_response_with_token(http, response, None, interaction_id, interaction_token)
+                create_response_with_token(http, response, None, interaction.id, interaction.token)
                     .await?;
             }
         }
@@ -535,16 +583,13 @@ impl Lp {
         let (resolved, info) = self.resolve(handler, guild_id).await?;
         let resp_content =
             resolved.build_message_contents(&info, resolved.params.role.map(RoleId::get), desc)?;
-        let member = guild_id.member(ctx, command.user().id).await?;
         Self::send(
             handler,
-            &member,
             &resolved,
+            &command.info()?,
             &info,
             &resp_content,
-            command.handle(),
             false,
-            command.channel_id(),
         )
         .await?;
         Ok(CommandResponse::None)
@@ -595,87 +640,6 @@ async fn lp_func(
     params.run_lp(handler, ctx, command, None).await
 }
 
-args!(SETCREATETHREADS_ARGS = create_threads: bool);
-
-const SETCREATETHREADS: CommandConst = CommandConst {
-    description: "Configure thread creation for listening parties",
-    permissions: Permissions::MANAGE_THREADS,
-    ..command!(/setcreatethreads SETCREATETHREADS_ARGS: set_create_threads)
-};
-
-async fn set_create_threads(
-    (create_threads,): SETCREATETHREADS_ARGS,
-    handler: &Handler,
-    _ctx: &Context,
-    command: &CommandInteraction,
-) -> anyhow::Result<CommandResponse> {
-    let guild_id = command.guild_id()?.get();
-    let db = handler.db.lock().await;
-    db.set_guild_field(guild_id, "create_threads", create_threads)
-        .context("updating 'create_threads' guild field")?;
-    let resp = if create_threads {
-        "Will create threads when setting up listening parties"
-    } else {
-        "Will not create threads when setting up listening parties"
-    };
-    CommandResponse::private(resp)
-}
-
-args!(SETROLE_ARGS = role: Option<RoleId>);
-
-const SETROLE: CommandConst = CommandConst {
-    description: "Set the role to ping for Listening Parties",
-    permissions: Permissions::MANAGE_ROLES,
-    ..command!(/setrole SETROLE_ARGS: setrole)
-};
-
-async fn setrole(
-    (role,): SETROLE_ARGS,
-    handler: &Handler,
-    _ctx: &Context,
-    command: &CommandInteraction,
-) -> anyhow::Result<CommandResponse> {
-    let guild_id = command.guild_id()?.get();
-    let role = role.as_ref().map(|r| r.get().to_string());
-    let db = handler.db.lock().await;
-    db.set_guild_field(guild_id, "role_id", &role)
-        .context("updating 'role_id' guild field")?;
-    let resp = if let Some(role_id) = role {
-        format!("Set listening party role to <@&{role_id}>.")
-    } else {
-        "Unset listening party role.".to_string()
-    };
-    CommandResponse::private(resp)
-}
-
-args!(SETWEBHOOK_ARGS =
-    webhook: Option<String>,
-);
-
-const SETWEBHOOK: CommandConst = CommandConst {
-    description: "set a webhook to use when creating listening parties",
-    permissions: Permissions::MANAGE_WEBHOOKS,
-    ..command!(/setwebhook SETWEBHOOK_ARGS: setwebhook)
-};
-
-async fn setwebhook(
-    (webhook,): SETWEBHOOK_ARGS,
-    handler: &Handler,
-    _ctx: &Context,
-    command: &CommandInteraction,
-) -> anyhow::Result<CommandResponse> {
-    let guild_id = command.guild_id()?.get();
-    let db = handler.db.lock().await;
-    db.set_guild_field(guild_id, "webhook", webhook.as_ref())
-        .context("updating 'webhook' guild field")?;
-    let resp = if webhook.is_some() {
-        "Listening parties will be created using a webhook."
-    } else {
-        "Listening parties will not be created using a webhook."
-    };
-    CommandResponse::private(resp)
-}
-
 pub struct EditLp {
     album: Option<String>,
     time: Option<String>,
@@ -715,7 +679,7 @@ impl EditLp {
             lp.params.time = Some(time.clone());
             lp.resolved_start = lp.params.resolve_time();
             new_start_formatted =
-                Some(lp.format_time(lp.resolved_duration_s.map(|d| Duration::seconds(d))));
+                Some(lp.format_time(lp.resolved_duration_s.map(Duration::seconds)));
             changed = true;
         }
         if !changed {
@@ -795,6 +759,7 @@ async fn edit_lp(
     }
     let desc = msg.content.split(SEPARATOR).nth(3).map(str::to_string);
     let edit_lp = EditLp { album, time };
+    // new path using data embedded LP message to rebuild message from scratch
     match edit_lp
         .edit_from_embedded_data(handler, ctx, &mut msg, command, desc.as_deref())
         .await
@@ -802,6 +767,7 @@ async fn edit_lp(
         Ok(resp) => return Ok(resp),
         Err(e) => eprintln!("Could not edit LP from embedded data: {e:?}"),
     }
+    // legacy path
     let mut new_content = Cow::<'_, str>::Borrowed(&msg.content);
     let mut resp = String::new();
     if let Some(album) = &edit_lp.album {
@@ -834,233 +800,7 @@ async fn edit_lp(
     CommandResponse::public(resp)
 }
 
-const CREATE_LP: CommandConst = CommandConst {
-    description: "Create a Listening Party",
-    ..command!(/create_listening_party: create_lp)
-};
-
-async fn wait_for_create_lp_submit(
-    handler: Arc<Handler>,
-    http: Arc<Http>,
-    mut receiver: Receiver<LpCreationEvent>,
-    (interaction_id, interaction_token): (InteractionId, String),
-    member: Member,
-    guild_id: GuildId,
-    channel_id: GenericChannelId,
-) {
-    // await initial configuration from the modal submission
-    let (modal_id, modal_token, album, link, description, time) = loop {
-        match receiver.recv().await {
-            None => return,
-            Some(LpCreationEvent::Initial {
-                modal_id,
-                modal_token,
-                album,
-                link,
-                description,
-                time,
-            }) => break (modal_id, modal_token, album, link, description, time),
-            _ => continue, // should be unreachable but handle to avoid breakage
-        }
-    };
-
-    // build params, resolve starting time, album info, role, genres...
-    let lp = Lp {
-        album,
-        link,
-        time,
-        provider: None,
-        role: None,
-    };
-    let Ok((resolved, info)) = lp.resolve(&handler, guild_id).await else {
-        return;
-    };
-
-    // build initial message contents
-    let contents = match resolved.build_message_contents(
-        &info,
-        resolved.params.role.map(RoleId::get),
-        description.as_deref(),
-    ) {
-        Ok(contents) => contents,
-        Err(e) => {
-            let err_msg = format!("Failed to create listening party: {e:?}");
-            eprintln!("{err_msg}");
-            // attempt to return error to user, ignore failure
-            _ = CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .content(err_msg)
-                    .ephemeral(true),
-            )
-            .execute(&http, modal_id, &modal_token)
-            .await;
-            return;
-        }
-    };
-
-    // build components to add to the LP creation message
-    let message_components =
-        listening_party_creator_components(Some(&member), resolved.params.role.clone());
-    // create ephemeral editable message
-    let res = CreateInteractionResponse::Message(
-        CreateInteractionResponseMessage::new()
-            .ephemeral(true)
-            .content(format!("# PREVIEW\n{contents}"))
-            .components(message_components),
-    )
-    .execute(&http, modal_id, &modal_token)
-    .await;
-    if let Err(e) = res {
-        eprintln!("failed to create ephemeral LP creation message: {e:?}");
-        return;
-    }
-
-    // start event routine
-    let mut creator = LpCreator {
-        id: interaction_id,
-        token: interaction_token,
-        channel_id: channel_id,
-        guild_id,
-        member,
-        modal_token,
-        lp: resolved,
-        info,
-        desc: description,
-    };
-    creator.run(&handler, &http, receiver).await;
-}
-
-async fn create_lp(
-    handler: &Handler,
-    ctx: &Context,
-    command: &CommandInteraction,
-) -> anyhow::Result<CommandResponse> {
-    // require guild ID
-    let guild_id = command.guild_id()?;
-
-    // create modal fields
-    let album_field = CreateLabel::input_text(
-        "Album",
-        CreateInputText::new(InputTextStyle::Short, "album").required(true),
-    )
-    .description("Album link, listening party title, or album search query");
-    let link_field = CreateLabel::input_text(
-        "Link",
-        CreateInputText::new(InputTextStyle::Short, "link").required(false),
-    )
-    .description("Optional");
-    let time_field = CreateLabel::input_text(
-        "Time",
-        CreateInputText::new(InputTextStyle::Short, "time")
-            .required(false)
-            .placeholder("+5"),
-    )
-    .description("Listening Party time (e.g. +5, XX:20)");
-    let description_field = CreateLabel::input_text(
-        "Description",
-        CreateInputText::new(InputTextStyle::Paragraph, "description").required(false),
-    );
-    let fields = vec![
-        CreateModalComponent::Label(album_field),
-        CreateModalComponent::Label(link_field),
-        CreateModalComponent::Label(description_field),
-        CreateModalComponent::Label(time_field),
-    ];
-
-    // create channel for events, store sender in module
-    let mod_lp: Arc<ModLp> = handler.module_arc()?;
-    let receiver = {
-        let (sender, receiver) = tokio::sync::mpsc::channel::<LpCreationEvent>(5);
-        mod_lp
-            .lp_creation_events
-            .write()
-            .await
-            .insert(command.id, sender);
-        receiver
-    };
-
-    // create modal
-    command
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::Modal(
-                CreateModal::new(
-                    format!("create_lp.{}", command.id),
-                    "Start a Listening Party",
-                )
-                .components(fields),
-            ),
-        )
-        .await?;
-
-    // get handles to values required for the event listening routine
-    let handler = handler.me.upgrade().unwrap();
-    let http = Arc::clone(&ctx.http);
-    let interaction_id = command.id;
-    let handle = (command.id, command.token.to_string());
-    let member = command
-        .member
-        .as_deref()
-        .map(|m| m.clone())
-        .context("expected member")?;
-    let channel_id = command.channel_id;
-
-    // spawn event handling routine, with a timeout
-    tokio::spawn(async move {
-        _ = tokio::time::timeout(
-            std::time::Duration::from_mins(10),
-            wait_for_create_lp_submit(
-                Arc::clone(&handler),
-                http,
-                receiver,
-                handle,
-                member,
-                guild_id,
-                channel_id,
-            ),
-        )
-        .await;
-        // remove sender from module
-        mod_lp
-            .lp_creation_events
-            .write()
-            .await
-            .remove(&interaction_id);
-    });
-    Ok(CommandResponse::None)
-}
-
-fn listening_party_creator_components(
-    member: Option<&Member>,
-    role_id: Option<RoleId>,
-) -> Vec<CreateComponent<'static>> {
-    let mut message_components = vec![];
-
-    if let Some(member) = member
-        && member
-            .permissions
-            .unwrap_or_default()
-            .contains(Permissions::MENTION_EVERYONE)
-    {
-        let role_field = CreateSelectMenu::new(
-            "select_listening_party_role",
-            CreateSelectMenuKind::Role {
-                default_roles: role_id.map(|role| Cow::Owned(vec![role])),
-            },
-        )
-        .max_values(1);
-        message_components.push(CreateComponent::ActionRow(CreateActionRow::SelectMenu(
-            role_field,
-        )));
-    }
-    message_components.push(CreateComponent::ActionRow(CreateActionRow::buttons(vec![
-        CreateButton::new("button_edit_lp").emoji('✏').label("Edit"),
-        CreateButton::new("button_send_lp").emoji('▶').label("Send"),
-    ])));
-    message_components
-}
-
-enum LpCreationEvent {
+pub enum LpCreationEvent {
     Initial {
         modal_id: InteractionId,
         modal_token: String,
@@ -1077,351 +817,6 @@ enum LpCreationEvent {
         time: Option<String>,
     },
     Send,
-}
-
-struct LpCreator {
-    id: InteractionId,
-    token: String,
-    channel_id: GenericChannelId,
-    modal_token: String,
-    guild_id: GuildId,
-    lp: ResolvedLp,
-    info: Album,
-    desc: Option<String>,
-    member: Member,
-}
-
-impl LpCreator {
-    fn build_contents(&mut self) -> anyhow::Result<String> {
-        self.lp.build_message_contents(
-            &self.info,
-            self.lp.params.role.map(RoleId::get),
-            self.desc.as_deref(),
-        )
-    }
-
-    async fn edit_preview(&mut self, http: &Http) {
-        let contents = self.build_contents().unwrap();
-        let resp = EditInteractionResponse::new()
-            .content(format!("# PREVIEW\n{contents}"))
-            .execute(http, &self.modal_token)
-            .await;
-        if let Err(e) = resp {
-            eprintln!("failed to edit ephemeral LP creation message: {e:?}");
-        }
-    }
-
-    async fn send(&mut self, handler: &Handler, http: &Http) -> bool {
-        let contents = self.build_contents().unwrap();
-        // send listening party as specified by configuration in DB
-        let res = Lp::send(
-            handler,
-            &self.member,
-            &self.lp,
-            &self.info,
-            &contents,
-            (self.id, &self.token),
-            true,
-            self.channel_id,
-        )
-        .await;
-        if let Err(e) = res {
-            eprintln!("failed to send LP: {e:?}");
-            // attempt to send a new ephemeral response to notify user
-            _ = CreateInteractionResponseFollowup::new()
-                .content(format!("failed to send listening party: {e:?}"))
-                .ephemeral(true)
-                .execute(http, None, &self.modal_token)
-                .await;
-            _ = EditInteractionResponse::new()
-                .content(format!("failed to send listening party: {e:?}"))
-                .execute(http, &self.modal_token)
-                .await;
-            return false;
-        }
-        _ = http
-            .delete_original_interaction_response(&self.modal_token)
-            .await;
-        return true;
-    }
-
-    async fn run(
-        &mut self,
-        handler: &Handler,
-        http: &Http,
-        mut receiver: Receiver<LpCreationEvent>,
-    ) {
-        use LpCreationEvent::*;
-        while let Some(evt) = receiver.recv().await {
-            match evt {
-                Initial { .. } => continue, // should not happen, ignore and carry on
-                Send => {
-                    // done editing, send final version
-                    if self.send(handler, http).await {
-                        // send succeeded, done
-                        return;
-                    }
-                    // send failed, stay in loop to allow retrying
-                }
-                ChangeRole(new_role) => {
-                    self.lp.params.role = Some(new_role);
-                    self.edit_preview(http).await;
-                }
-                Edit {
-                    album: title,
-                    link,
-                    description,
-                    time,
-                } => {
-                    let params = &mut self.lp.params;
-                    if params.album != title || params.link != link {
-                        // changed which album is being listened to, resolve album info again
-                        let lp = Lp {
-                            album: title,
-                            link,
-                            time,
-                            role: params.role,
-                            provider: params.provider.clone(),
-                        };
-                        let Ok((resolved, info)) = lp.resolve(handler, self.guild_id).await else {
-                            continue;
-                        };
-                        self.lp = resolved;
-                        self.info = info;
-                    } else {
-                        if params.time != time {
-                            self.lp.resolved_start = None;
-                        }
-                        params.time = time;
-                    }
-                    self.desc = description;
-                    self.edit_preview(http).await;
-                }
-            }
-        }
-    }
-}
-
-args!(SUBMIT_CREATE_LP_ARGS =
-    album: String,
-    link: Option<String>,
-    description: Option<String>,
-    time: Option<String>,
-);
-
-const SUBMIT_CREATE_LP: ModalCommandConst =
-    modal_command!(create_lp SUBMIT_CREATE_LP_ARGS: submit_create_lp);
-
-fn get_interaction_id(custom_id: &str) -> anyhow::Result<InteractionId> {
-    custom_id
-        .split('.')
-        .nth(1)
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(InteractionId::new)
-        .context("Cannot find interaction ID")
-}
-
-// handle submit of LP creation modal
-async fn submit_create_lp(
-    (album, link, description, time): SUBMIT_CREATE_LP_ARGS,
-    handler: &Handler,
-    _ctx: &Context,
-    modal: &ModalInteraction,
-) -> anyhow::Result<CommandResponse> {
-    // retrieve ID of the original command interaction
-    let original_interaction_id = get_interaction_id(&modal.data.custom_id)?;
-    let mod_lp: &ModLp = handler.module()?;
-
-    let evt = LpCreationEvent::Initial {
-        modal_id: modal.id,
-        modal_token: modal.token.to_string(),
-        album,
-        link,
-        description,
-        time,
-    };
-    mod_lp.dispatch_event(original_interaction_id, evt).await?;
-    Ok(CommandResponse::None)
-}
-
-const BUTTON_SEND_LP: ComponentCommandConst = component_command!(button_send_lp: button_send_lp);
-
-// handle start button for LP creator
-async fn button_send_lp(
-    handler: &Handler,
-    _ctx: &Context,
-    component: &ComponentInteraction,
-) -> anyhow::Result<CommandResponse> {
-    // retrieve ID of the original command interaction
-    let msg = &component.message;
-    let Some(MessageInteractionMetadata::ModalSubmit(modal_data)) =
-        msg.interaction_metadata.as_deref()
-    else {
-        return CommandResponse::ACK;
-    };
-    let MessageInteractionMetadata::Command(MessageCommandInteractionMetadata {
-        id: interaction_id,
-        ..
-    }) = modal_data.triggering_interaction_metadata.as_ref()
-    else {
-        return CommandResponse::ACK;
-    };
-
-    // use interaction ID to find sender to LP creator routine
-    let mod_lp: &ModLp = handler.module()?;
-    mod_lp
-        .dispatch_event(*interaction_id, LpCreationEvent::Send)
-        .await?;
-    CommandResponse::ACK
-}
-
-args!(SELECT_LP_ROLE_ARGS = role: RoleId);
-
-const CHANGE_LP_ROLE: ComponentCommandConst =
-    component_command!(select_listening_party_role SELECT_LP_ROLE_ARGS: select_lp_role);
-
-// handle role selection message component for LP creation
-async fn select_lp_role(
-    (role,): SELECT_LP_ROLE_ARGS,
-    handler: &Handler,
-    _ctx: &Context,
-    component: &ComponentInteraction,
-) -> anyhow::Result<CommandResponse> {
-    // retrieve ID of the original command interaction
-    let msg = &component.message;
-    let Some(MessageInteractionMetadata::ModalSubmit(modal_data)) =
-        msg.interaction_metadata.as_deref()
-    else {
-        return CommandResponse::ACK;
-    };
-    let MessageInteractionMetadata::Command(MessageCommandInteractionMetadata {
-        id: interaction_id,
-        ..
-    }) = modal_data.triggering_interaction_metadata.as_ref()
-    else {
-        return CommandResponse::ACK;
-    };
-
-    // use interaction ID to find sender to LP creator routine
-    let mod_lp: &ModLp = handler.module()?;
-    if let Some(sender) = mod_lp.lp_creation_events.read().await.get(interaction_id) {
-        sender.send(LpCreationEvent::ChangeRole(role)).await?;
-    } else {
-        bail!("Interaction not found");
-    }
-    CommandResponse::ACK
-}
-
-const BUTTON_EDIT_LP: ComponentCommandConst = component_command!(button_edit_lp: button_edit_lp);
-
-async fn button_edit_lp(
-    _handler: &Handler,
-    ctx: &Context,
-    component: &ComponentInteraction,
-) -> anyhow::Result<CommandResponse> {
-    // retrieve ID of the original command interaction
-    let msg = &component.message;
-    let Some(MessageInteractionMetadata::ModalSubmit(modal_data)) =
-        msg.interaction_metadata.as_deref()
-    else {
-        return CommandResponse::ACK;
-    };
-    let MessageInteractionMetadata::Command(MessageCommandInteractionMetadata {
-        id: interaction_id,
-        ..
-    }) = modal_data.triggering_interaction_metadata.as_ref()
-    else {
-        return CommandResponse::ACK;
-    };
-
-    // extract information about current LP configuration from message
-    let Some(pos) = msg.content.find(LP_URI) else {
-        return CommandResponse::private("no embedded data");
-    };
-    let url: Url = msg.content[pos..]
-        .trim_end_matches(')')
-        .parse()
-        .context("invalid embedded URL")?;
-    let lp: ResolvedLp = serde_urlencoded::de::from_str(url.query().unwrap_or_default())
-        .context("failed to deserialize embedded data")?;
-
-    // create modal fields, pre-filled with current values
-    let mut album_input = CreateInputText::new(InputTextStyle::Short, "album").required(true);
-    if let Some(title) = &lp.resolved_title {
-        album_input = album_input.value(title);
-    }
-    let album_field = CreateLabel::input_text("Album", album_input)
-        .description("Album link, listening party title, or album search query");
-
-    let mut link_input = CreateInputText::new(InputTextStyle::Short, "link").required(false);
-    if let Some(link) = &lp.resolved_link {
-        link_input = link_input.value(link);
-    }
-    let link_field = CreateLabel::input_text("Link", link_input).description("Optional");
-
-    let mut time_input = CreateInputText::new(InputTextStyle::Short, "time")
-        .required(false)
-        .placeholder("+5");
-    if let Some(time) = &lp.resolved_start {
-        let minute = time.minute();
-        time_input = time_input.value(format!("XX:{minute:02}"));
-    }
-    let time_field = CreateLabel::input_text("Time", time_input)
-        .description("Listening Party time (e.g. +5, XX:20)");
-
-    // extract description if any
-    let desc = msg.content.split(SEPARATOR).nth(3);
-    let mut description_input =
-        CreateInputText::new(InputTextStyle::Paragraph, "description").required(false);
-    if let Some(desc) = desc {
-        description_input = description_input.value(desc);
-    }
-    let description_field = CreateLabel::input_text("Description", description_input);
-    let fields = vec![
-        CreateModalComponent::Label(album_field),
-        CreateModalComponent::Label(link_field),
-        CreateModalComponent::Label(description_field),
-        CreateModalComponent::Label(time_field),
-    ];
-    component
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::Modal(
-                CreateModal::new(
-                    format!("edit_lp_creator.{interaction_id}"),
-                    "Edit Listening Party",
-                )
-                .components(fields),
-            ),
-        )
-        .await?;
-    Ok(CommandResponse::None)
-}
-
-// use the same arguments as the create LP modal
-const SUBMIT_EDIT_LP: ModalCommandConst =
-    modal_command!(edit_lp_creator SUBMIT_CREATE_LP_ARGS: submit_edit_lp);
-
-// handle submit from edition modal for LP creator
-async fn submit_edit_lp(
-    (album, link, description, time): SUBMIT_CREATE_LP_ARGS,
-    handler: &Handler,
-    _ctx: &Context,
-    modal: &ModalInteraction,
-) -> anyhow::Result<CommandResponse> {
-    // extract original interaction ID, stored in modal custom_id
-    let original_interaction_id = get_interaction_id(&modal.data.custom_id)?;
-
-    // use interaction ID to find sender to LP creator routine
-    let evt = LpCreationEvent::Edit {
-        album,
-        link,
-        description,
-        time,
-    };
-    let mod_lp: &ModLp = handler.module()?;
-    mod_lp.dispatch_event(original_interaction_id, evt).await?;
-    CommandResponse::ACK
 }
 
 const EDIT_LISTENING_PARTY: CommandConst = CommandConst {
@@ -1472,24 +867,20 @@ async fn edit_listening_party(
         .context("failed to deserialize embedded data")?;
 
     // create edition modal
-    let album_input_id = format!("album");
-    let mut album_input =
-        CreateInputText::new(InputTextStyle::Short, album_input_id).required(true);
+    let mut album_input = CreateInputText::new(InputTextStyle::Short, "album").required(true);
     if let Some(title) = &lp.resolved_title {
         album_input = album_input.value(title);
     }
     let album_field = CreateLabel::input_text("Album", album_input)
         .description("Album link, listening party title, or album search query");
 
-    let link_input_id = format!("link");
-    let mut link_input = CreateInputText::new(InputTextStyle::Short, link_input_id).required(false);
+    let mut link_input = CreateInputText::new(InputTextStyle::Short, "link").required(false);
     if let Some(link) = &lp.resolved_link {
         link_input = link_input.value(link);
     }
     let link_field = CreateLabel::input_text("Link", link_input).description("Optional");
 
-    let time_input_id = format!("time");
-    let mut time_input = CreateInputText::new(InputTextStyle::Short, time_input_id)
+    let mut time_input = CreateInputText::new(InputTextStyle::Short, "time")
         .required(false)
         .placeholder("+5");
     if let Some(time) = &lp.resolved_start {
@@ -1500,9 +891,8 @@ async fn edit_listening_party(
         .description("Listening Party time (e.g. +5, XX:20)");
 
     let desc = msg.content.split(SEPARATOR).nth(3);
-    let desc_input_id = format!("desc");
     let mut description_input =
-        CreateInputText::new(InputTextStyle::Paragraph, desc_input_id).required(false);
+        CreateInputText::new(InputTextStyle::Paragraph, "desc").required(false);
     if let Some(desc) = desc {
         description_input = description_input.value(desc);
     }
@@ -1535,7 +925,7 @@ pub struct ModLp {
 
 impl ModLp {
     // dispatch LP creation event using the initial interaction ID
-    async fn dispatch_event(
+    pub async fn dispatch_event(
         &self,
         interaction: InteractionId,
         evt: LpCreationEvent,
@@ -1624,17 +1014,17 @@ impl Module for ModLp {
 
     fn register_commands(&self, store: &mut dyn Storer) {
         store.register(LP);
-        store.register(SETROLE);
-        store.register(SETCREATETHREADS);
-        store.register(SETWEBHOOK);
+        store.register(config::SETROLE);
+        store.register(config::SETCREATETHREADS);
+        store.register(config::SETWEBHOOK);
         store.register(EDIT_LP);
-        store.register(CREATE_LP);
-        store.register(BUTTON_EDIT_LP);
-        store.register(SUBMIT_EDIT_LP);
         store.register(EDIT_LISTENING_PARTY);
-        store.register(SUBMIT_CREATE_LP);
-        store.register(CHANGE_LP_ROLE);
-        store.register(BUTTON_SEND_LP);
+        store.register(lp_creator::CREATE_LP);
+        store.register(lp_creator::BUTTON_EDIT_LP);
+        store.register(lp_creator::SUBMIT_EDIT_LP);
+        store.register(lp_creator::SUBMIT_CREATE_LP);
+        store.register(lp_creator::CHANGE_LP_ROLE);
+        store.register(lp_creator::BUTTON_SEND_LP);
         store.register(ModLp::complete_lp as CompletionHandler);
     }
 }

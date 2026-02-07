@@ -62,6 +62,23 @@ impl Album {
         }
     }
 
+    pub fn format_duration(&self) -> Option<String> {
+        let duration = self.duration?;
+        let mut buf = String::new();
+        if duration.num_hours() > 0 {
+            _ = write!(&mut buf, "{}h", duration.num_hours());
+        }
+        let minutes = duration.num_minutes() % 60;
+        if minutes > 0 {
+            _ = write!(&mut buf, "{minutes:02}m");
+        }
+        let seconds = duration.num_seconds();
+        if seconds < 60 {
+            _ = write!(&mut buf, "{seconds}s");
+        }
+        Some(buf)
+    }
+
     pub fn format_tracks(&self, limit: Option<usize>) -> String {
         let n_tracks = self.tracks.len();
         let mut formatted = String::with_capacity(n_tracks * 15);

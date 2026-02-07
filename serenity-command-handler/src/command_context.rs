@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{Context as _, anyhow};
 use serenity::{
     all::{
         ComponentInteraction, CreateAttachment, GenericChannelId, GuildId, InteractionId, Label,
@@ -16,6 +16,15 @@ use serenity::{
 use serenity_command::{CommandResponse, ContentAndFlags};
 
 pub type InteractionHandle<'a> = (InteractionId, &'a str);
+
+#[derive(Clone, Debug)]
+pub struct InteractionInfo<'a> {
+    pub id: InteractionId,
+    pub token: &'a str,
+    pub guild_id: GuildId,
+    pub channel_id: GenericChannelId,
+    pub member: &'a Member,
+}
 
 pub async fn create_response_with_token(
     http: &Http,
@@ -61,6 +70,8 @@ pub trait InteractionExt {
     fn guild_id(&self) -> anyhow::Result<GuildId>;
     fn handle(&self) -> InteractionHandle<'_>;
 
+    fn info(&self) -> anyhow::Result<InteractionInfo<'_>>;
+
     fn user(&self) -> &User;
 
     fn member(&self) -> Option<&Member>;
@@ -87,6 +98,16 @@ impl InteractionExt for &CommandInteraction {
 
     fn handle(&self) -> InteractionHandle<'_> {
         (self.id, &self.token)
+    }
+
+    fn info(&self) -> anyhow::Result<InteractionInfo<'_>> {
+        Ok(InteractionInfo {
+            id: self.id,
+            token: &self.token,
+            guild_id: self.guild_id()?,
+            channel_id: self.channel_id,
+            member: self.member.as_ref().context("Must be run in a server")?,
+        })
     }
 
     fn user(&self) -> &User {
@@ -125,6 +146,16 @@ impl InteractionExt for ModalInteraction {
         (self.id, &self.token)
     }
 
+    fn info(&self) -> anyhow::Result<InteractionInfo<'_>> {
+        Ok(InteractionInfo {
+            id: self.id,
+            token: &self.token,
+            guild_id: self.guild_id()?,
+            channel_id: self.channel_id,
+            member: self.member.as_ref().context("Must be run in a server")?,
+        })
+    }
+
     fn user(&self) -> &User {
         &self.user
     }
@@ -161,6 +192,16 @@ impl InteractionExt for ComponentInteraction {
         (self.id, &self.token)
     }
 
+    fn info(&self) -> anyhow::Result<InteractionInfo<'_>> {
+        Ok(InteractionInfo {
+            id: self.id,
+            token: &self.token,
+            guild_id: self.guild_id()?,
+            channel_id: self.channel_id,
+            member: self.member.as_ref().context("Must be run in a server")?,
+        })
+    }
+
     fn user(&self) -> &User {
         &self.user
     }
@@ -194,6 +235,10 @@ impl<T: InteractionExt + Sync> InteractionExt for &T {
 
     fn handle(&self) -> InteractionHandle<'_> {
         (*self).handle()
+    }
+
+    fn info(&self) -> anyhow::Result<InteractionInfo<'_>> {
+        (*self).info()
     }
 
     fn user(&self) -> &User {

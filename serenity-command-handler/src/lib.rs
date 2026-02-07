@@ -511,7 +511,9 @@ impl<T: 'static + Send + Sync + Module> TypeMapKey for KeyWrapper<T> {
 
 pub mod prelude {
     pub use super::{
-        CommandConst, CommandStore, CompletionHandler, CompletionStore, Handler, HandlerBuilder,
-        InteractionExt, ModalCommandStore, Module, ModuleMap, RegisterableModule, Storer,
+        CommandConst, CommandStore, CompletionHandler, CompletionStore, ComponentCommandConst,
+        Handler, HandlerBuilder, InteractionExt, ModalCommandConst, ModalCommandStore, Module,
+        ModuleMap, RegisterableModule, Storer,
     };
+    pub use serenity_command::{CommandResponse, args, command, component_command, modal_command};
 }
