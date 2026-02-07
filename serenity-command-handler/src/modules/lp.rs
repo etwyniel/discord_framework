@@ -968,7 +968,7 @@ async fn create_lp(
     ];
 
     // create channel for events, store sender in module
-    let mod_lp: &ModLp = handler.module()?;
+    let mod_lp: Arc<ModLp> = handler.module_arc()?;
     let receiver = {
         let (sender, receiver) = tokio::sync::mpsc::channel::<LpCreationEvent>(5);
         mod_lp
@@ -1021,7 +1021,6 @@ async fn create_lp(
         )
         .await;
         // remove sender from module
-        let mod_lp: &ModLp = handler.module().unwrap();
         mod_lp
             .lp_creation_events
             .write()
@@ -1436,6 +1435,7 @@ async fn edit_listening_party(
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let author_id = command.user.id;
+    // find last LP pinged in that channel
     let mod_lp: &ModLp = handler.module().unwrap();
     let Some((message_id, user_id)) = mod_lp
         .lp_messages
@@ -1446,7 +1446,8 @@ async fn edit_listening_party(
     else {
         return CommandResponse::private("No recent listening party to edit.");
     };
-    let msg = ctx.http.get_message(command.channel_id, message_id).await?;
+
+    // check that user can edit this LP
     if user_id != author_id
         && let Some(member) = &command.member
         && !member
@@ -1456,6 +1457,10 @@ async fn edit_listening_party(
     {
         return CommandResponse::private("Cannot edit listening party");
     }
+
+    // load full LP message
+    let msg = ctx.http.get_message(command.channel_id, message_id).await?;
+    // find embedded parameters
     let Some(pos) = msg.content.find(LP_URI) else {
         return CommandResponse::private("no embedded data");
     };
@@ -1466,8 +1471,8 @@ async fn edit_listening_party(
     let lp: ResolvedLp = serde_urlencoded::de::from_str(url.query().unwrap_or_default())
         .context("failed to deserialize embedded data")?;
 
-    let lp_id = msg.id;
-    let album_input_id = format!("album.{lp_id}");
+    // create edition modal
+    let album_input_id = format!("album");
     let mut album_input =
         CreateInputText::new(InputTextStyle::Short, album_input_id).required(true);
     if let Some(title) = &lp.resolved_title {
@@ -1476,14 +1481,14 @@ async fn edit_listening_party(
     let album_field = CreateLabel::input_text("Album", album_input)
         .description("Album link, listening party title, or album search query");
 
-    let link_input_id = format!("link.{lp_id}");
+    let link_input_id = format!("link");
     let mut link_input = CreateInputText::new(InputTextStyle::Short, link_input_id).required(false);
     if let Some(link) = &lp.resolved_link {
         link_input = link_input.value(link);
     }
     let link_field = CreateLabel::input_text("Link", link_input).description("Optional");
 
-    let time_input_id = format!("time.{lp_id}");
+    let time_input_id = format!("time");
     let mut time_input = CreateInputText::new(InputTextStyle::Short, time_input_id)
         .required(false)
         .placeholder("+5");
@@ -1495,46 +1500,27 @@ async fn edit_listening_party(
         .description("Listening Party time (e.g. +5, XX:20)");
 
     let desc = msg.content.split(SEPARATOR).nth(3);
-    let desc_input_id = format!("desc.{lp_id}");
+    let desc_input_id = format!("desc");
     let mut description_input =
         CreateInputText::new(InputTextStyle::Paragraph, desc_input_id).required(false);
     if let Some(desc) = desc {
         description_input = description_input.value(desc);
     }
     let description_field = CreateLabel::input_text("Description", description_input);
-    let mut fields = vec![
+
+    let fields = vec![
         CreateModalComponent::Label(album_field),
         CreateModalComponent::Label(link_field),
         CreateModalComponent::Label(description_field),
         CreateModalComponent::Label(time_field),
     ];
-    if let Some(member) = &command.member
-        && member
-            .permissions
-            .unwrap_or_default()
-            .contains(Permissions::MENTION_EVERYONE)
-    {
-        let default_roles = handler
-            .get_guild_field(command.guild_id()?.get(), "role_id")
-            .await
-            .map(|r| Cow::Owned(vec![RoleId::new(r)]))
-            .ok();
-        let role_field = CreateLabel::select_menu(
-            "Role",
-            CreateSelectMenu::new("role", CreateSelectMenuKind::Role { default_roles })
-                .max_values(1),
-        );
-        fields.push(CreateModalComponent::Label(role_field));
-    }
+
     command
         .create_response(
             &ctx.http,
             CreateInteractionResponse::Modal(
-                CreateModal::new(
-                    format!("create_lp.{}", command.id),
-                    "Start a Listening Party",
-                )
-                .components(fields),
+                CreateModal::new(format!("create_lp.{}", command.id), "Edit Listening Party")
+                    .components(fields),
             ),
         )
         .await?;
