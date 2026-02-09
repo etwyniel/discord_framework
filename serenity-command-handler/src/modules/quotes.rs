@@ -54,7 +54,7 @@ pub async fn message_to_quote_contents(
         .iter()
         .find_position(|r| r.reaction_type == ReactionType::from_str("🗨️").unwrap())
         .map(|(ndx, _)| ndx)
-        .unwrap_or(message.reactions.len() as usize);
+        .unwrap_or(message.reactions.len());
     let prev_react = message
         .reactions
         .get(quote_ndx.wrapping_sub(1))
