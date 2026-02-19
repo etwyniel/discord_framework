@@ -983,14 +983,14 @@ async fn set_release_year(
     year: u64,
 ) -> anyhow::Result<()> {
     let db = db.lock().await;
-    db.conn().execute("INSERT INTO album_cache (artist, album, year) VALUES (lower(?1), lower(?2), ?3) ON CONFLICT(artist, album) DO NOTHING",
+    db.conn().execute("INSERT INTO album_cache (artist, album, year) VALUES (LOWER(?1), LOWER(?2), ?3) ON CONFLICT(artist, album) DO NOTHING",
     params![artist, album, year])?;
     Ok(())
 }
 
 async fn set_last_checked(db: &Mutex<Db>, artist: &str, album: &str) -> anyhow::Result<()> {
     let db = db.lock().await;
-    db.conn().execute("INSERT INTO album_cache (artist, album, last_checked) VALUES (?1, ?2, ?3) ON CONFLICT(artist, album) DO UPDATE SET last_checked = ?3",
+    db.conn().execute("INSERT INTO album_cache (artist, album, last_checked) VALUES (LOWER(?1), LOWER(?2), ?3) ON CONFLICT(artist, album) DO UPDATE SET last_checked = ?3",
     params![artist.to_lowercase(), album.to_lowercase(), Utc::now().timestamp()])?;
     Ok(())
 }
@@ -998,11 +998,14 @@ async fn set_last_checked(db: &Mutex<Db>, artist: &str, album: &str) -> anyhow::
 fn get_release_year_db(db: &Db, artist: &str, album: &str) -> Result<u64, u64> {
     let (year, last_checked): (Option<u64>, Option<u64>) = db
         .conn()
-        .query_row(
-            "SELECT year, last_checked FROM album_cache WHERE artist = ?1 AND album = ?2",
-            [artist.to_lowercase(), album.to_lowercase()],
+        .query_one(
+            "SELECT year, last_checked FROM album_cache WHERE artist = LOWER(?1) AND album = LOWER(?2)",
+            [artist, album],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
+        .inspect_err(|err| {
+            dbg!(err);
+        })
         .unwrap_or((None, None));
     match (year, last_checked) {
         (Some(year), _) => Ok(year),
@@ -1025,7 +1028,7 @@ const FIX_RELEASE_YEAR: CommandConst = CommandConst {
 };
 
 async fn fix_release_year(
-    (album, artist, year): FIX_RELEASE_YEAR_ARGS,
+    (artist, album, year): FIX_RELEASE_YEAR_ARGS,
     handler: &Handler,
     _ctx: &Context,
     _command: &CommandInteraction,
