@@ -14,7 +14,7 @@ args!(QUERY_ARGS =
     qry: String,
 );
 
-const QUERY: CommandConst = CommandConst {
+pub const QUERY: CommandConst = CommandConst {
     description: "Query the database (admin-only)",
     permissions: Permissions::MANAGE_GUILD,
     ..command!(/query QUERY_ARGS: query)
@@ -81,7 +81,7 @@ pub fn do_query(
     CommandResponse::public(resp)
 }
 
-async fn query(
+pub async fn query(
     (query,): QUERY_ARGS,
     handler: &Handler,
     _ctx: &Context,
