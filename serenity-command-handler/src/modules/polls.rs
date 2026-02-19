@@ -21,14 +21,18 @@ use tokio::time::timeout;
 
 use crate::{events, prelude::*};
 
+// Default emotes
+// FIXME make generic, use these values in bot config
 const YES: &str = "<:FeelsGoodCrab:988509541069127780>";
 const NO: &str = "<:FeelsBadCrab:988508541499342918>";
 const START: &str = "<a:CrabRave:988508208240922635>";
 const COUNT: &str = "🦀";
 const GO: &str = "<a:CrabRave:988508208240922635>";
 
+/// How many ongoing polls the bot will keep track of
 const MAX_POLLS: usize = 20;
 
+/// The type of a poll, either a simple question or a listening party start poll
 pub enum PollType {
     Question(String),
     Ready {
@@ -37,6 +41,7 @@ pub enum PollType {
     },
 }
 
+/// An ongoing poll
 pub struct PendingPoll {
     msg: Message,
     typ: PollType,
@@ -78,6 +83,7 @@ struct ReadyPoll {
     go_emote: Option<String>,
 }
 
+/// Create a ready poll that will use the supplied emotes when started
 async fn ready_poll(
     (count_emote, go_emote): READY_POLL_ARSG,
     handler: &Handler,
@@ -110,6 +116,7 @@ async fn ready_poll(
     Ok(CommandResponse::None)
 }
 
+/// Create a question or ready poll, handle its events
 async fn create_poll(
     poll_type: PollType,
     handler: &Handler,
@@ -185,6 +192,7 @@ async fn create_poll(
 }
 
 impl ReadyPoll {
+    /// Create a ready poll with the supplied emotes
     async fn create_poll(
         self,
         handler: &Handler,
@@ -221,6 +229,7 @@ pub struct Poll {
 }
 
 impl Poll {
+    /// Create a question poll
     async fn create_poll(
         self,
         handler: &Handler,
@@ -239,6 +248,7 @@ impl Poll {
     }
 }
 
+/// Responds with a poll for the supplied question
 async fn poll(
     (question,): POLL_ARGS,
     handler: &Handler,
@@ -268,12 +278,13 @@ async fn poll(
     Ok(CommandResponse::None)
 }
 
+/// Formats a list of users as a comma-separated series of mentions.
 fn format_user_list(buf: &mut String, users: &[UserId]) {
     buf.push_str(&users.iter().map(|u| format!("<@{}>", u.get())).join(", "));
 }
 
-// build ready poll message.
-// lists users that have clicked the YES react as being ready.
+/// Build ready poll message.
+/// Lists users that have clicked the YES react as being ready.
 fn build_message(typ: &PollType, users_yes: &[UserId], users_no: &[UserId]) -> String {
     match typ {
         PollType::Question(q) => {
@@ -306,7 +317,7 @@ fn build_message(typ: &PollType, users_yes: &[UserId], users_no: &[UserId]) -> S
     }
 }
 
-// task responsible for handling reactions to a poll
+/// Task responsible for handling reactions to a poll.
 async fn poll_task(
     module: Arc<ModPoll>,
     http: Arc<Http>,
@@ -328,6 +339,7 @@ async fn poll_task(
         }
 
         // poll for new events
+        // use timeout loop to avoid updating message for every change
         while let Ok(evt) = timeout(Duration::from_millis(150), r.recv()).await {
             let Some(evt) = evt else {
                 // channel closed
@@ -336,6 +348,7 @@ async fn poll_task(
             last_event = Instant::now();
             match evt {
                 PollEvent::AddStatus(user, status) => {
+                    // select list to add to
                     let vec = match status {
                         UserStatus::Ready => &mut users_yes,
                         UserStatus::NotReady => &mut users_no,
@@ -343,13 +356,16 @@ async fn poll_task(
                     if !vec.contains(&user) {
                         vec.push(user)
                     }
+                    changed = true;
                 }
                 PollEvent::RemoveStatus(user, status) => {
+                    // select list to remove from
                     let vec = match status {
                         UserStatus::Ready => &mut users_yes,
                         UserStatus::NotReady => &mut users_no,
                     };
-                    vec.retain(|&u| u != user)
+                    vec.retain(|&u| u != user);
+                    changed = true;
                 }
                 PollEvent::Start if !started => {
                     let PollType::Ready {
@@ -357,6 +373,7 @@ async fn poll_task(
                         go_emote,
                     } = &poll.typ
                     else {
+                        // start event is meaningless for question polls, ignore
                         continue;
                     };
                     started = true;
@@ -372,33 +389,29 @@ async fn poll_task(
                     if let Err(e) = res {
                         eprintln!("error executing crabdown: {e}");
                     }
-                    continue;
                 }
-                _ => continue,
+                _ => {}
             }
-            changed = true;
         }
         if !changed {
             // no change, no need to edit the message
             continue;
         }
         let content = build_message(&poll.typ, &users_yes, &users_no);
-        // edit message in a separate task to avoid blocking this one
-        tokio::spawn({
-            let http = Arc::clone(&http);
-            let mut msg = poll.msg.clone();
-            async move {
-                let res = msg
-                    .edit(
-                        http.as_ref(),
-                        EditMessage::new()
-                            .content(content)
-                            .allowed_mentions(CreateAllowedMentions::new().empty_users()),
-                    )
-                    .await;
-                if let Err(e) = res {
-                    eprintln!("failed to edit ready message: {e}");
-                }
+        // edit message in a separate task to avoid blocking the event loop
+        let http = Arc::clone(&http);
+        let mut msg = poll.msg.clone();
+        tokio::spawn(async move {
+            let res = msg
+                .edit(
+                    http.as_ref(),
+                    EditMessage::new()
+                        .content(content)
+                        .allowed_mentions(CreateAllowedMentions::new().empty_users()),
+                )
+                .await;
+            if let Err(e) = res {
+                eprintln!("failed to edit ready message: {e}");
             }
         });
         changed = false;
@@ -410,7 +423,7 @@ pub struct ReadyPollStarted {
     pub channel: GenericChannelId,
 }
 
-// performs the actual countdown
+/// Performs the actual countdown.
 pub async fn crabdown(
     module: Arc<ModPoll>,
     http: &Http,

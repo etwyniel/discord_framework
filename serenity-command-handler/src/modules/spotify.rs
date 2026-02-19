@@ -48,7 +48,6 @@ static SPOTIFY_URL_MATCHER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(SPOTIFY_URL_PATTERN).unwrap());
 
 pub struct Spotify<C: BaseClient> {
-    // client: ClientCredsSpotify,
     pub client: C,
 }
 
@@ -410,10 +409,7 @@ async fn unlink(
 
 #[async_trait]
 impl Module for Spotify<ClientCredsSpotify> {
-    fn register_commands(
-        &self,
-        _: &mut dyn Storer,
-    ) {
+    fn register_commands(&self, _: &mut dyn Storer) {
         // store.register::<Unlink>();
     }
 }
@@ -499,10 +495,7 @@ impl Module for Spotify<AuthCodeSpotify> {
         db.add_guild_field("spotify_user_id", "STRING")
     }
 
-    fn register_commands(
-        &self,
-        _: &mut dyn Storer,
-    ) {
+    fn register_commands(&self, _: &mut dyn Storer) {
         // store.register(SPOTIFY_AUTHENTICATE);
     }
     //

@@ -1,4 +1,4 @@
-use serenity::all::CreateCommandOption;
+use serenity::all::{CreateAttachment, CreateCommandOption, CreateInteractionResponseFollowup};
 use serenity::model::prelude::CommandInteraction;
 use serenity::{async_trait, prelude::Context};
 use serenity_command::{CommandResponse, args, command};
@@ -19,6 +19,7 @@ args!(LOOKUP_ALBUM_ARGS =
     provider: Option<String>,
 );
 
+/// configure options for the /album command
 fn set_lookup_options(
     name: &str,
     opt: CreateCommandOption<'static>,
@@ -37,12 +38,14 @@ const LOOKUP_ALBUM: CommandConst = CommandConst {
     ..command!(/album LOOKUP_ALBUM_ARGS(set_lookup_options): lookup_album)
 };
 
+/// look up an album using the specified provider
 async fn lookup_album(
     (album, provider): LOOKUP_ALBUM_ARGS,
     handler: &Handler,
-    _ctx: &Context,
-    _command: &CommandInteraction,
+    ctx: &Context,
+    command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
+    command.defer(&ctx.http).await?;
     let album_lookup = handler.module::<AlbumLookup>()?;
     let mut info = if album.starts_with("https://") {
         // command called with a URL, ignore provider param, find appropriate
@@ -54,28 +57,20 @@ async fn lookup_album(
             .context("Unable to fetch metadata for this type of link")?;
         provider.get_from_url(&album).await?
     } else {
+        // use specified provider to find album metadata
         let provider = album_lookup.get_provider(provider.as_deref());
         provider.query_album(&album).await?
     };
+    // start message content with basic information and link
     let mut contents = info.as_linked_header(None);
-    _ = writeln!(&mut contents);
+    contents.push('\n');
+
+    // add extra metadata if present
 
     let mut add_sep = false;
-    if let Some(duration) = info.duration {
+    if let Some(duration) = info.format_duration() {
         add_sep = true;
-        contents.push('*');
-        if duration.num_hours() > 0 {
-            _ = write!(&mut contents, "{}h", duration.num_hours());
-        }
-        let minutes = duration.num_minutes() % 60;
-        let seconds = duration.num_seconds();
-        if minutes > 0 || seconds > 0 {
-            _ = write!(&mut contents, "{minutes:02}m");
-        }
-        if seconds < 60 {
-            _ = write!(&mut contents, "{seconds}s");
-        }
-        contents.push('*');
+        _ = write!(&mut contents, "*{duration}*");
     }
 
     if let Some(release_date) = &info.release_date {
@@ -97,21 +92,33 @@ async fn lookup_album(
         }
         _ = writeln!(&mut contents, "{genres}");
     }
-    let mut attachments = Vec::new();
+    let mut attachment = None;
     if !info.has_rich_embed {
+        // album provider doesn't provide nice embeds,
+        // add track list and album cover if present
         contents.push_str(&info.format_tracks(None));
-        attachments.extend(info.cover.map(|url| (url, "cover.jpg".to_string())));
+        if let Some(url) = info.cover {
+            attachment = CreateAttachment::url(&ctx.http, url, "cover.jpg")
+                .await
+                .ok();
+        }
     }
-    Ok(CommandResponse::Public(
-        serenity_command::ResponseType::WithAttachments(contents, Vec::new(), attachments),
-    ))
+    let mut resp = CreateInteractionResponseFollowup::new().content(contents);
+    if let Some(attachment) = attachment {
+        resp = resp.add_file(attachment);
+    }
+    command.create_followup(&ctx.http, resp).await?;
+
+    Ok(CommandResponse::None)
 }
 
+/// album lookup module
 pub struct AlbumLookup {
     providers: Vec<Arc<dyn AlbumProvider>>,
 }
 
 impl AlbumLookup {
+    /// get album provider from provider name
     pub fn get_provider(&self, provider: Option<&str>) -> &dyn AlbumProvider {
         provider
             .and_then(|id| self.providers.iter().find(|p| p.id() == id))
@@ -120,6 +127,7 @@ impl AlbumLookup {
             .as_ref()
     }
 
+    /// list loaded providers
     pub fn providers(&self) -> &[Arc<dyn AlbumProvider>] {
         &self.providers
     }

@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context as _, anyhow, bail};
 use chrono::Duration;
@@ -8,7 +8,6 @@ use itertools::Itertools;
 use regex::Regex;
 use rspotify::prelude::Id;
 use rusqlite::{Connection, params};
-use serde_derive::{Deserialize, Serialize};
 use serenity::{
     async_trait,
     builder::{CreateCommand, CreateCommandOption, CreateEmbed},
@@ -21,6 +20,7 @@ use serenity::{
     },
     prelude::{Context, RwLock},
 };
+use tokio::task::block_in_place;
 
 use crate::{
     RegisterableModule,
@@ -33,231 +33,18 @@ use crate::{
 };
 use serenity_command::{CommandKey, CommandResponse, args, command};
 
-use super::complete::process_autocomplete;
+mod complete;
+use complete::process_autocomplete;
 
+pub mod model;
+use model::*;
+
+/// Default form response range
 const DEFAULT_RANGE: &str = "B:Z";
 
 const SCOPE_FORMS_READONLY: &str = "https://www.googleapis.com/auth/forms.body.readonly";
 
-#[derive(Deserialize, Debug)]
-pub struct Form {
-    #[serde(rename = "formId")]
-    pub id: String,
-    pub info: Info,
-    pub items: Vec<Item>,
-    #[serde(rename = "responderUri")]
-    pub uri: String,
-    #[serde(rename = "linkedSheetId")]
-    pub linked_sheet_id: Option<String>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Info {
-    pub title: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Item {
-    #[serde(rename = "itemId")]
-    pub id: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
-
-    #[serde(rename = "questionItem")]
-    pub question: Option<QuestionItem>,
-    #[serde(rename = "questionGroupItem")]
-    pub question_group: Option<QuestionGroupItem>,
-    #[serde(rename = "pageBreakItem")]
-    pub page_break: Option<PageBreakItem>,
-    #[serde(rename = "textItem")]
-    pub text: Option<TextItem>,
-    #[serde(rename = "imageItem")]
-    pub image: Option<ImageItem>,
-    #[serde(rename = "videoItem")]
-    pub video: Option<VideoItem>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct QuestionItem {
-    pub question: Question,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct QuestionGroupItem {
-    pub questions: Vec<Question>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct PageBreakItem {}
-
-#[derive(Deserialize, Debug)]
-pub struct TextItem {}
-
-#[derive(Deserialize, Debug)]
-pub struct ImageItem {}
-
-#[derive(Deserialize, Debug)]
-pub struct VideoItem {}
-
-#[derive(Deserialize, Debug)]
-pub struct Question {
-    #[serde(rename = "questionId")]
-    pub id: String,
-    #[serde(default)]
-    pub required: bool,
-
-    #[serde(rename = "choiceQuestion")]
-    pub choice: Option<ChoiceQuestion>,
-    #[serde(rename = "textQuestion")]
-    pub text: Option<TextQuestion>,
-    #[serde(rename = "scaleQuestion")]
-    pub scale: Option<ScaleQuestion>,
-    #[serde(rename = "dateQuestion")]
-    pub date: Option<DateQuestion>,
-    #[serde(rename = "timeQuestion")]
-    pub time: Option<TimeQuestion>,
-    #[serde(rename = "fileUploadQuestion")]
-    pub file_upload: Option<FileUploadQuestion>,
-    #[serde(rename = "rowQuestion")]
-    pub row: Option<RowQuestion>,
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq)]
-pub enum ChoiceType {
-    #[serde(rename = "RADIO")]
-    Radio,
-    #[serde(rename = "CHECKBOX")]
-    Checkbox,
-    #[serde(rename = "DROP_DOWN")]
-    DropDown,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct ChoiceQuestion {
-    #[serde(rename = "type")]
-    pub ty: ChoiceType,
-    pub options: Vec<ChoiceOption>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct ChoiceOption {
-    #[serde(default)]
-    pub value: String,
-    #[serde(rename = "isOther", default)]
-    pub is_other: bool,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct TextQuestion {}
-
-#[derive(Deserialize, Debug)]
-pub struct ScaleQuestion {
-    pub low: i64,
-    pub high: i64,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct DateQuestion {}
-
-#[derive(Deserialize, Debug)]
-pub struct TimeQuestion {}
-
-#[derive(Deserialize, Debug)]
-pub struct FileUploadQuestion {}
-
-#[derive(Deserialize, Debug)]
-pub struct RowQuestion {}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct SimpleForm {
-    pub id: String,
-    pub title: String,
-    pub questions: Vec<SimpleQuestion>,
-    pub responder_uri: String,
-    pub sheet_id: Option<String>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct SimpleQuestion {
-    #[serde(default)]
-    pub id: String,
-    pub required: bool,
-    pub title: String,
-    pub ty: QuestionType,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub enum QuestionType {
-    Text,
-    Choice(Vec<String>),
-}
-
-impl Item {
-    pub fn to_simple(&self) -> Option<anyhow::Result<SimpleQuestion>> {
-        let question = match &self.question {
-            Some(q) => &q.question,
-            _ => return None,
-        };
-        let title = match self.title.as_deref() {
-            Some(title) => title.to_string(),
-            None => return Some(Err(anyhow!("Question is missing a title"))),
-        };
-        let required = question.required;
-        let ty = if question.text.is_some() {
-            QuestionType::Text
-        } else if let Some(choice) = question.choice.as_ref() {
-            if choice.ty == ChoiceType::Checkbox {
-                return Some(Err(anyhow!("Checkboxes are not supported")));
-            }
-            if choice.options.iter().any(|opt| opt.is_other) {
-                return Some(Err(anyhow!("'Other' field is not supported")));
-            }
-            let values = choice.options.iter().map(|opt| opt.value.clone()).collect();
-            QuestionType::Choice(values)
-        } else {
-            return Some(Err(anyhow!("Can only handle text or choice questions")));
-        };
-        Some(Ok(SimpleQuestion {
-            id: question.id.clone(),
-            required,
-            title,
-            ty,
-        }))
-    }
-}
-
-impl Form {
-    pub fn to_simple(&self) -> anyhow::Result<SimpleForm> {
-        let id = self.id.clone();
-        let title = self
-            .info
-            .title
-            .as_ref()
-            .ok_or_else(|| anyhow!("Form is missing a title"))?
-            .clone();
-        let questions = self
-            .items
-            .iter()
-            .filter_map(Item::to_simple)
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let responder_uri = self.uri.clone();
-        let sheet_id = self
-            .linked_sheet_id
-            .as_ref()
-            // .ok_or_else(|| anyhow!("No linked spreadsheet"))?
-            .cloned();
-        Ok(SimpleForm {
-            id,
-            title,
-            questions,
-            responder_uri,
-            sheet_id,
-        })
-    }
-}
-
-// converts s to a string that can be used as a command or option name
+/// Converts `s` to a string that can be used as a command or option name
 pub fn sanitize_name(s: &str) -> String {
     let temp = s.chars().filter(|c| c.is_ascii()).collect::<String>();
     let it = temp
@@ -271,12 +58,15 @@ pub fn sanitize_name(s: &str) -> String {
             }
         })
         .filter(|&c| c.is_alphanumeric() || c == '_');
+    // initialize output, will not be larger than input string
     let mut out = String::with_capacity(s.len());
     let mut prev_was_underscore = false;
     for c in it {
         if out.len() >= 32 {
+            // trim to 32 characters
             break;
         }
+        // deduplicate underscores
         if c == '_' {
             if !prev_was_underscore {
                 prev_was_underscore = true;
@@ -291,22 +81,21 @@ pub fn sanitize_name(s: &str) -> String {
 }
 
 impl SimpleForm {
+    /// Create a discord slash command from a form
     pub fn to_command(&self, command_name: &str) -> CreateCommand<'_> {
         let mut cmd = CreateCommand::new(sanitize_name(command_name)).description(&self.title);
         // skip first question, assumed to be username
         let mut questions = self.questions.iter().skip(1).collect::<Vec<_>>();
         // discord requires required options to be first
-        questions.sort_by(|l, r| match (l.required, r.required) {
-            (true, true) | (false, false) => Ordering::Equal,
-            (false, true) => Ordering::Greater,
-            (true, false) => Ordering::Less,
-        });
+        questions.sort_by_key(|question| !question.required);
+
+        // does the next option support completion
         let mut autocomplete = false;
         for (i, q) in questions.iter().enumerate() {
             let sanitized = sanitize_name(&q.title);
             if let Some(next) = questions.get(i + 1) {
                 let next_lower = next.title.to_lowercase();
-                if matches!(q.ty, QuestionType::Text)
+                if let QuestionType::Text = q.ty
                     && (next_lower.contains("spotify") || next_lower.contains("link"))
                 {
                     // q is most likely asking for the song artist and name, which we will retrieve
@@ -319,6 +108,7 @@ impl SimpleForm {
                 .required(q.required)
                 .set_autocomplete(autocomplete);
             if let QuestionType::Choice(values) = &q.ty {
+                // handle multiple choice questions
                 opt = values
                     .iter()
                     .fold(opt, |opt, v| opt.add_string_choice(v, v));
@@ -335,9 +125,10 @@ pub struct FormsClient {
 }
 
 impl FormsClient {
+    /// Fetch the definition of a form
     pub async fn get_form(&self, form_id: &str) -> anyhow::Result<SimpleForm> {
         let token = self.authenticator.get_token().await?;
-        let url = format!("https://forms.googleapis.com/v1/forms/{}", form_id);
+        let url = format!("https://forms.googleapis.com/v1/forms/{form_id}");
         let form: Form = reqwest::Client::new()
             .get(url)
             .bearer_auth(token)
@@ -345,7 +136,7 @@ impl FormsClient {
             .await?
             .json()
             .await?;
-        form.to_simple()
+        form.try_into()
     }
 }
 
@@ -367,6 +158,7 @@ args!(COMMAND_FROM_FORM_ARGS =
     submission_type: Option<String>,
 );
 
+/// Configure options for the /command_from_form command
 fn set_command_from_form_options(
     name: &str,
     opt: CreateCommandOption<'static>,
@@ -392,6 +184,7 @@ pub struct CommandFromForm {
     pub submission_type: Option<String>,
 }
 
+/// Create a discord slash command from a google form, specified by its edit URL
 async fn command_from_form(
     (command_name, form_id, submission_type): COMMAND_FROM_FORM_ARGS,
     handler: &Handler,
@@ -408,12 +201,14 @@ async fn command_from_form(
 }
 
 impl CommandFromForm {
+    /// Create a discord slash command from a google form, specified by its edit URL
     async fn add_form(
         mut self,
         handler: &Handler,
         ctx: &Context,
         guild_id: GuildId,
     ) -> anyhow::Result<CommandResponse> {
+        // extract form ID from edit URL
         let spreadsheet_url_re = Regex::new(r#"https://docs.google.com/forms/d/([^/]+)"#).unwrap();
         if let Some(cap) = spreadsheet_url_re.captures(&self.form_id) {
             self.form_id = cap.get(1).unwrap().as_str().to_string();
@@ -427,26 +222,30 @@ impl CommandFromForm {
         let submission_type = self
             .submission_type
             .as_deref()
-            .unwrap_or("song")
+            .unwrap_or("song") // default submission type
             .to_string();
 
+        // insert form definition into DB
         let db = handler.db.lock().await;
-        db.conn().execute(
-            "INSERT INTO forms (guild_id, command_name, command_id, form, submission_type)
+        block_in_place(|| {
+            db.conn().execute(
+                "INSERT INTO forms (guild_id, command_name, command_id, form, submission_type)
                  VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT (guild_id, command_name) DO UPDATE
                  SET command_id = ?3, form = ?4, submission_type = ?5
                  WHERE guild_id = ?1 AND command_name = ?2",
-            params![
-                guild_id.get(),
-                cmd.name.to_string(),
-                cmd.id.get(),
-                form_json,
-                &submission_type
-            ],
-        )?;
+                params![
+                    guild_id.get(),
+                    cmd.name.to_string(),
+                    cmd.id.get(),
+                    form_json,
+                    &submission_type
+                ],
+            )
+        })?;
         drop(db);
 
+        // store form command in module to avoid having to access DB every time a command is executed
         let command = FormCommand {
             guild_id: guild_id.get(),
             command_name: cmd.name.to_string(),
@@ -505,6 +304,7 @@ pub const REFRESH_FORM_COMMAND: CommandConst = CommandConst {
     ..command!(/refresh_form_command REFRESH_FORM_COMMAND_ARGS: refresh_command)
 };
 
+/// Re-create a form command by fetching the form definition again
 async fn refresh_command(
     (command_name,): REFRESH_FORM_COMMAND_ARGS,
     handler: &Handler,
@@ -512,16 +312,20 @@ async fn refresh_command(
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?;
+    // load form definition
     let (form, submission_type): (String, Option<String>) = {
         let db = handler.db.lock().await;
-        db.conn()
+        block_in_place(|| {
+            db.conn()
             .query_row(
                 "SELECT form, submission_type FROM forms WHERE guild_id = ?1 AND command_name = ?2",
                 params![guild_id.get(), &command_name],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .context(format!("Command /{} not found", &command_name))?
+            .context(format!("Command /{} not found", &command_name))
+        })?
     };
+    // create form command
     let form: SimpleForm = serde_json::from_slice(form.as_bytes())?;
     let params = CommandFromForm {
         command_name,
@@ -542,6 +346,7 @@ pub const DELETE_FORM_COMMAND: CommandConst = CommandConst {
     ..command!(/delete_form_command DELETE_FORM_COMMAND_ARGS: delete_command)
 };
 
+/// Delete a form command
 async fn delete_command(
     (command_name,): DELETE_FORM_COMMAND_ARGS,
     handler: &Handler,
@@ -549,6 +354,7 @@ async fn delete_command(
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?;
+    // load discord command, delete it if it exists
     if let Some(cmd) = guild_id
         .get_commands(&ctx.http)
         .await?
@@ -556,17 +362,22 @@ async fn delete_command(
         .find(|cmd| cmd.name == command_name)
     {
         guild_id.delete_command(&ctx.http, cmd.id).await?;
-    }
+    };
+    // delete command in database
     let db = handler.db.lock().await;
-    db.conn().execute(
-        "DELETE FROM forms WHERE guild_id = ?1 AND command_name = ?2",
-        params![guild_id.get(), &command_name],
-    )?;
+    block_in_place(|| {
+        db.conn().execute(
+            "DELETE FROM forms WHERE guild_id = ?1 AND command_name = ?2",
+            params![guild_id.get(), &command_name],
+        )
+    })?;
+
     {
+        // remove command from cache in module
         let mut forms = handler.module::<Forms>()?.forms.write().await;
         forms.retain(|form| form.command_name != command_name);
     }
-    CommandResponse::public(format!("Deleted command {}", &command_name))
+    CommandResponse::public(format!("Deleted command `/{command_name}`"))
 }
 
 pub const LIST_FORMS: CommandConst = CommandConst {
@@ -574,6 +385,7 @@ pub const LIST_FORMS: CommandConst = CommandConst {
     ..command!(/list_forms: list_forms)
 };
 
+/// returns a list of the form commands registered for this guild
 async fn list_forms(
     handler: &Handler,
     _ctx: &Context,
@@ -610,6 +422,7 @@ pub const OVERRIDE_SUBMISSION_RANGE: CommandConst = CommandConst {
     ..command!(/override_form_submissions_range OVERRIDE_RANGE_ARGS: override_range)
 };
 
+/// change the range of the linked spreadsheet in which to look for responses to a command
 async fn override_range(
     (command_name, range): OVERRIDE_RANGE_ARGS,
     handler: &Handler,
@@ -618,40 +431,49 @@ async fn override_range(
 ) -> anyhow::Result<CommandResponse> {
     let guild_id = command.guild_id()?.get();
     let module = handler.module::<Forms>()?;
-    let mut forms = module.forms.write().await;
-    let form = forms
-        .iter_mut()
-        .find(|form| form.guild_id == guild_id && form.command_name == command_name)
-        .ok_or_else(|| anyhow!("Command {} not found", &command_name))?;
-    form.submissions_range = range.clone();
+    {
+        // update form in cache
+        let mut forms = module.forms.write().await;
+        let form = forms
+            .iter_mut()
+            .find(|form| form.guild_id == guild_id && form.command_name == command_name)
+            .ok_or_else(|| anyhow!("Command {} not found", &command_name))?;
+        form.submissions_range = range.clone();
+    }
+    // update form in DB
     let db = handler.db.lock().await;
-    db.conn()
-        .execute(
-            "UPDATE forms SET submissions_range = ?3 WHERE guild_id = ?1 AND command_name = ?2",
-            params![guild_id, &command_name, range.as_deref(),],
-        )
-        .context("Failed to update submissions range")?;
+    block_in_place(|| {
+        db.conn()
+            .execute(
+                "UPDATE forms SET submissions_range = ?3 WHERE guild_id = ?1 AND command_name = ?2",
+                params![guild_id, &command_name, range.as_deref(),],
+            )
+            .context("Failed to update submissions range")
+    })?;
+    // build response
     let range = range.as_deref().unwrap_or(DEFAULT_RANGE);
-    let resp = format!("Will search for submissions in `{range}`");
+    let resp = format!("Will search for submissions to `/{command_name}` in `{range}`");
     CommandResponse::public(resp)
 }
 
+/// Queries all the forms from the database
 pub fn load_forms(db: &Connection) -> anyhow::Result<Vec<FormCommand>> {
-    let mut stmt =
-        db.prepare("SELECT guild_id, command_name, command_id, form, submission_type, submissions_range FROM forms")?;
-    let commands = stmt
-        .query([])?
-        .map(|row| {
-            Ok(FormCommand {
-                guild_id: row.get(0)?,
-                command_name: row.get(1)?,
-                command_id: row.get(2)?,
-                form: serde_json::from_slice(row.get::<_, String>(3)?.as_bytes()).unwrap(),
-                submission_type: row.get(4)?,
-                submissions_range: row.get(5)?,
+    let commands = block_in_place(|| {
+        let mut stmt = db.prepare("SELECT guild_id, command_name, command_id, form, submission_type, submissions_range FROM forms")?;
+        stmt.query([])?
+            .map(|row| {
+                let form = serde_json::from_slice(row.get::<_, String>(3)?.as_bytes()).unwrap();
+                Ok(FormCommand {
+                    guild_id: row.get(0)?,
+                    command_name: row.get(1)?,
+                    command_id: row.get(2)?,
+                    form,
+                    submission_type: row.get(4)?,
+                    submissions_range: row.get(5)?,
+                })
             })
-        })
-        .collect::<Vec<_>>()?;
+            .collect::<Vec<_>>()
+    })?;
     Ok(commands)
 }
 
@@ -669,6 +491,7 @@ impl SimpleForm {
         )
     }
 
+    /// Handle submitting a response to a form
     pub async fn submit(
         &self,
         handler: &Handler,
@@ -678,14 +501,16 @@ impl SimpleForm {
     ) -> anyhow::Result<CommandResponse> {
         let user = &interaction.user;
         let user_handle = if let Some(discriminator) = user.discriminator {
+            // legacy format
             format!("{}#{:04}", &user.name, discriminator)
         } else {
-            // new username format
             format!("@{}", &user.name)
         };
 
+        // get required modules
         let spotify: &Spotify = handler.module()?;
         let lookup: &AlbumLookup = handler.module()?;
+
         let mut song_infos = Vec::new();
         let mut song_urls = Vec::new();
         let mut value_pairs = Vec::with_capacity(self.questions.len());
@@ -783,6 +608,7 @@ impl SimpleForm {
         CommandResponse::private(contents)
     }
 
+    /// Fetch a user's response to this form
     pub async fn get_submissions_for_user(
         &self,
         handler: &Handler,
@@ -800,20 +626,21 @@ impl SimpleForm {
         let Some(values) = rows.values else {
             bail!("No submissions found on this sheet");
         };
+        // find this user's submissions
         let username = user.name.to_lowercase();
         let rows = values
             .into_iter()
             .filter(|row| {
-                row.first()
-                    .and_then(|v| v.as_str())
-                    .map(|submitter| {
-                        submitter
-                            .trim_start_matches('@')
-                            .to_lowercase()
-                            .starts_with(&username)
-                    })
-                    .unwrap_or(false)
+                // filter by username
+                let Some(submitter) = row.first().and_then(|v| v.as_str()) else {
+                    return false;
+                };
+                submitter
+                    .trim_start_matches('@')
+                    .to_lowercase()
+                    .starts_with(&username)
             })
+            // take the last 5 submissions
             .rev()
             .take(5)
             .map(|row| {
@@ -824,6 +651,7 @@ impl SimpleForm {
                     .join(" - ")
             })
             .collect_vec();
+        // format response
         let mut resp = rows.iter().rev().join("\n");
         if resp.is_empty() {
             resp = format!(
@@ -845,23 +673,25 @@ pub const GET_SUBMISSIONS: CommandConst = CommandConst {
     ..command!(/get_submissions GET_SUBMISSIONS_ARGS: get_submissions)
 };
 
+/// Responds with the user's response to the specified form command
 async fn get_submissions(
     (command_name,): GET_SUBMISSIONS_ARGS,
     handler: &Handler,
     _ctx: &Context,
     command: &CommandInteraction,
 ) -> anyhow::Result<CommandResponse> {
+    // load specified form from cache
     let forms: &Forms = handler.module()?;
     let forms = forms.forms.read().await;
-    let cmd_name = &command_name;
-    let Some(form) = forms.iter().find(|form| &form.command_name == cmd_name) else {
-        bail!("Command {} not found", cmd_name);
+    let Some(form) = forms.iter().find(|form| form.command_name == command_name) else {
+        bail!("Command {command_name} not found");
     };
     form.form
         .get_submissions_for_user(handler, &command.user, form.submissions_range.as_deref())
         .await
 }
 
+/// Forms module
 pub struct Forms {
     pub sheets: Sheets,
     pub forms_client: FormsClient,
@@ -869,6 +699,7 @@ pub struct Forms {
 }
 
 impl Forms {
+    /// Handle completion of form management commands and form submission commands
     fn complete_forms<'a>(
         handler: &'a Handler,
         ctx: &'a Context,
@@ -878,28 +709,27 @@ impl Forms {
         async move { process_autocomplete(handler, ctx, ac).await }.boxed()
     }
 
+    /// Handle form submission slash commands
     pub fn process_form_command<'a>(
         handler: &'a Handler,
         ctx: &'a Context,
         cmd: &'a CommandInteraction,
     ) -> BoxFuture<'a, anyhow::Result<CommandResponse>> {
         async move {
-            let guild_id = cmd
-                .guild_id
-                .ok_or_else(|| anyhow!("Must be run in a server"))?
-                .get();
+            let guild_id = cmd.guild_id()?.get();
             let data = &cmd.data;
+            // find form definition
             let forms = handler.module::<Forms>()?.forms.read().await;
             let form = forms
                 .iter()
                 .find(|form| form.guild_id == guild_id && form.command_name == data.name);
-            if let Some(form) = form {
-                return form
-                    .form
-                    .submit(handler, ctx, cmd, &form.submission_type)
-                    .await;
-            }
-            bail!("Command not found")
+            let Some(form) = form else {
+                bail!("Command not found")
+            };
+            // submit response
+            form.form
+                .submit(handler, ctx, cmd, &form.submission_type)
+                .await
         }
         .boxed()
     }
@@ -908,8 +738,9 @@ impl Forms {
 #[async_trait]
 impl Module for Forms {
     async fn setup(&mut self, db: &mut Db) -> anyhow::Result<()> {
-        db.conn().execute(
-            "CREATE TABLE IF NOT EXISTS forms (
+        block_in_place(|| {
+            db.conn().execute(
+                "CREATE TABLE IF NOT EXISTS forms (
                 guild_id INTEGER NOT NULL,
                 command_name STRING NOT NULL,
                 command_id INTEGER NOT NULL,
@@ -919,8 +750,9 @@ impl Module for Forms {
 
                 UNIQUE(guild_id, command_name)
             )",
-            [],
-        )?;
+                [],
+            )
+        })?;
         let forms = load_forms(db.conn()).unwrap();
         *self.forms.write().await = forms;
         Ok(())

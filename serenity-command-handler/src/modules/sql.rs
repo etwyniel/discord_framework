@@ -7,6 +7,7 @@ use serenity::{
     prelude::Context,
 };
 use serenity_command::{CommandResponse, args, command};
+use tokio::task::block_in_place;
 
 use crate::{db::Db, prelude::*};
 
@@ -20,6 +21,9 @@ pub const QUERY: CommandConst = CommandConst {
     ..command!(/query QUERY_ARGS: query)
 };
 
+/// Respond with the result of an SQL query.
+///
+/// This command can only be called by admins.
 pub fn do_query(
     mut qry: &str,
     db: &Connection,
@@ -36,7 +40,7 @@ pub fn do_query(
     } else {
         String::new()
     };
-    // check user is amin
+    // check user is admin
     match db.query_row(
         "SELECT id FROM admin WHERE id = ?1",
         [requester.get()],
@@ -48,17 +52,17 @@ pub fn do_query(
     }
     let mut stmt = db.prepare(qry)?;
     let n_columns = stmt.column_count();
-    let result: Vec<Vec<_>> = stmt
-        .query_map([], |row| {
+    let result: Vec<Vec<_>> = block_in_place(|| {
+        stmt.query_map([], |row| {
+            // format results
             let mut result = Vec::with_capacity(n_columns);
             for i in 0..n_columns {
-                let value = match row.get_ref(i) {
-                    Ok(ValueRef::Null) => None,
-                    Ok(ValueRef::Integer(n)) => Some(n.to_string()),
-                    Ok(ValueRef::Real(r)) => Some(r.to_string()),
-                    Ok(ValueRef::Text(t)) => Some(String::from_utf8_lossy(t).to_string()),
-                    Ok(ValueRef::Blob(_)) => Some("<binary data>".to_string()),
-                    Err(e) => return Err(e),
+                let value = match row.get_ref(i)? {
+                    ValueRef::Null => None,
+                    ValueRef::Integer(n) => Some(n.to_string()),
+                    ValueRef::Real(r) => Some(r.to_string()),
+                    ValueRef::Text(t) => Some(String::from_utf8_lossy(t).to_string()),
+                    ValueRef::Blob(_) => Some("<binary data>".to_string()),
                 };
                 result.push(value)
             }
@@ -66,7 +70,8 @@ pub fn do_query(
         })?
         .take(10)
         .collect::<Result<_, _>>()
-        .map_err(|e| anyhow!("{qry_context}{e}"))?;
+    })
+    .map_err(|e| anyhow!("{qry_context}{e}"))?;
     let mut resp = format!("{qry_context}```\n");
     resp.push_str(&stmt.column_names().join("|"));
     for row in result {
@@ -81,6 +86,9 @@ pub fn do_query(
     CommandResponse::public(resp)
 }
 
+/// Respond with the result of an SQL query.
+///
+/// This command can only be called by admins.
 pub async fn query(
     (query,): QUERY_ARGS,
     handler: &Handler,

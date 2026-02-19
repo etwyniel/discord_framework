@@ -1,10 +1,10 @@
 use anyhow;
 use rusqlite::{
-    params,
+    Connection, ToSql, params,
     types::{FromSql, ValueRef},
-    Connection, ToSql,
 };
 use serenity::all::GuildId;
+use tokio::task::block_in_place;
 
 use std::borrow::Cow;
 
@@ -16,16 +16,18 @@ pub struct Db {
 
 impl Db {
     pub fn new(conn: Connection) -> anyhow::Result<Db> {
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS guild(id INTEGER PRIMARY KEY)",
-            [],
-        )
-        .map_err(anyhow::Error::from)?;
-
-        conn.execute("CREATE TABLE IF NOT EXISTS enabled_guild_commands (guild_id INTEGER, command_name STRING)", [])
+        block_in_place(|| {
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS guild(id INTEGER PRIMARY KEY)",
+                [],
+            )
             .map_err(anyhow::Error::from)?;
 
-        Ok(Db { conn })
+            conn.execute("CREATE TABLE IF NOT EXISTS enabled_guild_commands (guild_id INTEGER, command_name STRING)", [])
+            .map_err(anyhow::Error::from)?;
+
+            Ok(Db { conn })
+        })
     }
 
     pub fn conn(&self) -> &Connection {
@@ -36,20 +38,22 @@ impl Db {
         &mut self.conn
     }
 
-    pub fn get_guild_field<T: FromSql + Default>(
+    pub fn get_guild_field<T: FromSql>(
         &self,
         guild_id: u64,
         field: &str,
-    ) -> anyhow::Result<T> {
-        match self.conn.query_row(
-            &format!("SELECT {field} FROM guild WHERE id = ?1"),
-            [guild_id],
-            |row| row.get(0),
-        ) {
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Default::default()),
-            res => res,
+    ) -> anyhow::Result<Option<T>> {
+        let res = block_in_place(|| {
+            self.conn.query_row(
+                &format!("SELECT {field} FROM guild WHERE id = ?1"),
+                [guild_id],
+                |row| row.get(0),
+            )
+        });
+        if let Err(rusqlite::Error::QueryReturnedNoRows) = &res {
+            return Ok(None);
         }
-        .map_err(anyhow::Error::from)
+        res.map_err(anyhow::Error::from)
     }
 
     pub fn set_guild_field<T: ToSql>(
@@ -58,32 +62,36 @@ impl Db {
         field: &str,
         value: T,
     ) -> anyhow::Result<()> {
-        self.conn.execute(
-            &format!("UPDATE guild SET {field} = ?2 WHERE id = ?1"),
-            params![guild_id, value],
-        )?;
-        Ok(())
+        block_in_place(|| {
+            self.conn.execute(
+                &format!("UPDATE guild SET {field} = ?2 WHERE id = ?1"),
+                params![guild_id, value],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn add_guild_field(&mut self, name: &str, def: &str) -> anyhow::Result<()> {
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS guild(id INTEGER PRIMARY KEY)",
-                [],
-            )
-            .map_err(anyhow::Error::from)?;
-        let count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('guild') WHERE name = ?1",
-            [name],
-            |row| row.get(0),
-        )?;
-        if count != 0 {
-            return Ok(());
-        }
-        self.conn
-            .execute(&format!("ALTER TABLE guild ADD COLUMN {name} {def}"), [])
-            .map_err(anyhow::Error::from)?;
-        Ok(())
+        block_in_place(|| {
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS guild(id INTEGER PRIMARY KEY)",
+                    [],
+                )
+                .map_err(anyhow::Error::from)?;
+            let count: usize = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('guild') WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )?;
+            if count != 0 {
+                return Ok(());
+            }
+            self.conn
+                .execute(&format!("ALTER TABLE guild ADD COLUMN {name} {def}"), [])
+                .map_err(anyhow::Error::from)?;
+            Ok(())
+        })
     }
 
     pub fn set_command_enabled_for_guild(
@@ -92,35 +100,40 @@ impl Db {
         guild_id: GuildId,
         enable: bool,
     ) -> anyhow::Result<()> {
-        if enable {
-            self.conn
+        block_in_place(|| {
+            if enable {
+                self.conn
                 .execute(
                     "INSERT INTO enabled_guild_commands (guild_id, command_name) VALUES  (?1, ?2)",
                     params![guild_id.get(), command_name],
                 )
                 .map_err(anyhow::Error::from)
-        } else {
-            self.conn
+            } else {
+                self.conn
                 .execute(
                     "DELETE FROM enabled_guild_commands WHERE guild_id = ?1 AND command_name = ?2",
                     params![guild_id.get(), command_name],
                 )
                 .map_err(anyhow::Error::from)
-        }?;
-        Ok(())
+            }?;
+            Ok(())
+        })
     }
 
     pub fn get_command_enabled_guilds(&mut self, command_name: &str) -> Vec<GuildId> {
-        let Ok(mut stmt) = self
-            .conn
-            .prepare("SELECT guild_id FROM enabled_guild_commands WHERE command_name = ?1")
-        else {
-            return vec![];
-        };
-        let Ok(res) = stmt.query_map([command_name], |row| Ok(GuildId::new(row.get(0)?))) else {
-            return vec![];
-        };
-        res.filter_map(|row| row.ok()).collect()
+        block_in_place(|| {
+            let Ok(mut stmt) = self
+                .conn
+                .prepare("SELECT guild_id FROM enabled_guild_commands WHERE command_name = ?1")
+            else {
+                return vec![];
+            };
+            let Ok(res) = stmt.query_map([command_name], |row| Ok(GuildId::new(row.get(0)?)))
+            else {
+                return vec![];
+            };
+            res.filter_map(|row| row.ok()).collect()
+        })
     }
 }
 
@@ -143,11 +156,11 @@ pub fn column_as_string(val: ValueRef<'_>) -> rusqlite::Result<String> {
 }
 
 impl Handler {
-    pub async fn get_guild_field<T: FromSql + Default>(
+    pub async fn get_guild_field<T: FromSql>(
         &self,
         guild_id: u64,
         field: &str,
-    ) -> anyhow::Result<T> {
+    ) -> anyhow::Result<Option<T>> {
         self.db.lock().await.get_guild_field(guild_id, field)
     }
 

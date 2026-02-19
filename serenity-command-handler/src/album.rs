@@ -62,6 +62,7 @@ impl Album {
         }
     }
 
+    /// Format an album duration naturally
     pub fn format_duration(&self) -> Option<String> {
         let duration = self.duration?;
         let mut buf = String::new();
@@ -74,7 +75,7 @@ impl Album {
         }
         let seconds = duration.num_seconds();
         if seconds < 60 {
-            _ = write!(&mut buf, "{seconds}s");
+            _ = write!(&mut buf, "{seconds:02}s");
         }
         Some(buf)
     }

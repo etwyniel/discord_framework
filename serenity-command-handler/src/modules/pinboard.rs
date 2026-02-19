@@ -1,7 +1,7 @@
-use anyhow::{Context as _, anyhow};
+use anyhow::{Context as _, anyhow, bail};
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
-use serenity::all::{Channel, GenericChannelId, MessagePin};
+use serenity::all::{Channel, GenericChannelId, Http, MessagePin};
 use serenity::builder::{CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter, ExecuteWebhook};
 use serenity::model::prelude::Member;
 use serenity::model::user::User;
@@ -15,11 +15,14 @@ use serenity::{
 };
 use serenity_command::{CommandResponse, args, command};
 use std::fmt::Write;
+use std::sync::Arc;
+use tokio::task::block_in_place;
 
 use crate::{RegisterableModule, prelude::*};
 
 const MAX_EMBEDS: usize = 10;
 
+/// Copy a message embed to a CreateEmbed
 pub fn copy_embed(em: &Embed) -> CreateEmbed<'_> {
     let mut out = CreateEmbed::new();
     if let Some(title) = &em.title {
@@ -44,10 +47,9 @@ pub fn copy_embed(em: &Embed) -> CreateEmbed<'_> {
     if let Some(desc) = &em.description {
         out = out.description(desc);
     }
-    out = em
-        .fields
-        .iter()
-        .fold(out, |out, f| out.field(&f.name, &f.value, f.inline));
+    for fld in &em.fields {
+        out = out.field(&fld.name, &fld.value, fld.inline)
+    }
     if let Some(footer) = &em.footer {
         let mut f = CreateEmbedFooter::new(&footer.text);
         if let Some(icon) = &footer.icon_url {
@@ -67,6 +69,7 @@ pub fn copy_embed(em: &Embed) -> CreateEmbed<'_> {
     out
 }
 
+/// Subset of fields of a discord message
 #[derive(Debug)]
 #[allow(unused)]
 struct SimpleMessage<'a> {
@@ -102,6 +105,7 @@ const SETPINBOARDWEBHOOK: CommandConst = CommandConst {
     ..command!(/setpinboardwebhook SETPINBOARDWEBHOOK_ARGS: set_pinboard_webhook)
 };
 
+/// Configure the webhook through which to post pinned messages
 async fn set_pinboard_webhook(
     (webhook,): SETPINBOARDWEBHOOK_ARGS,
     handler: &Handler,
@@ -124,21 +128,26 @@ async fn set_pinboard_webhook(
     })
 }
 
+/// Load the list of channels for which the bot is configured to
+/// move pins to the pinboard
 async fn load_allowed_channels(
     handler: &Handler,
     guild_id: GuildId,
 ) -> anyhow::Result<Vec<ChannelId>> {
     let db = handler.db.lock().await;
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT channel_id FROM pinboard_allowed_channels WHERE guild_id = ?1")?;
-    let channels: Vec<_> = stmt
-        .query([guild_id.get()])?
-        .map(|row| Ok(ChannelId::new(row.get(0)?)))
-        .collect()?;
-    Ok(channels)
+    block_in_place(|| {
+        let mut stmt = db
+            .conn()
+            .prepare("SELECT channel_id FROM pinboard_allowed_channels WHERE guild_id = ?1")?;
+        let channels: Vec<_> = stmt
+            .query([guild_id.get()])?
+            .map(|row| Ok(ChannelId::new(row.get(0)?)))
+            .collect()?;
+        Ok(channels)
+    })
 }
 
+/// Helper to get a user's avatar, favoring the server avatar if present
 fn user_avatar(user: &User, member: Option<&Member>) -> Option<String> {
     member
         .and_then(|member| member.avatar_url().clone())
@@ -147,28 +156,70 @@ fn user_avatar(user: &User, member: Option<&Member>) -> Option<String> {
         .filter(|av| av.starts_with("http"))
 }
 
+/// Extract data to create a message pin.
+///
+/// Returns the message author's name and avatar,
+/// as well as any images contained in the message.
+async fn prepare_message<'a>(
+    msg: &'a Message,
+    guild_id: GuildId,
+    http: &'_ Http,
+) -> anyhow::Result<(String, Option<String>, Vec<&'a str>)> {
+    let author = &msg.author;
+    let member = match guild_id.member(http, author.id).await {
+        Ok(m) => Some(m),
+        Err(e) => {
+            // log error but carry on
+            eprintln!("Error getting member: {e:#}");
+            None
+        }
+    };
+    let name = member
+        .as_ref()
+        .map(|m| m.display_name())
+        .unwrap_or(&author.name);
+    let avatar = user_avatar(author, member.as_ref());
+    // filter attachments to find images
+    let images = msg
+        .attachments
+        .iter()
+        .filter(|at| at.height.is_some())
+        .map(|at| at.url.as_str())
+        .collect();
+    Ok((name.to_string(), avatar, images))
+}
+
+/// Pinboard module.
 pub struct Pinboard;
 
 impl Pinboard {
-    // Posts a newly-pinned message to a pinboard channel via webhook and unpins it.
+    /// Posts a newly-pinned message to a pinboard channel via webhook and unpins it.
     pub async fn move_pin_to_pinboard(
         handler: &Handler,
         ctx: &Context,
         channel: GenericChannelId,
         guild_id: GuildId,
     ) -> anyhow::Result<()> {
-        let pinboard_webhook = handler
+        // load webhook
+        let Some(pinboard_webhook) = handler
             .db
             .lock()
             .await
             .get_guild_field(guild_id.get(), "pinboard_webhook")
             .ok()
+            .flatten()
             .filter(|s: &String| !s.is_empty())
-            .ok_or_else(|| anyhow!("No webhook configured"))?;
+        else {
+            bail!("No webhook configured")
+        };
+
+        // check if this pin should be moved to pinboard
         let allowed_channels = load_allowed_channels(handler, guild_id).await?;
         if !(allowed_channels.is_empty() || allowed_channels.contains(&channel.expect_channel())) {
             return Ok(());
         }
+
+        // find pinned message
         let pins = channel
             .pins(&ctx.http, None, None)
             .await
@@ -177,65 +228,39 @@ impl Pinboard {
             message: last_pin, ..
         }) = pins.items.last()
         else {
+            // no pinned message, ignore
             return Ok(());
         };
-        let message: SimpleMessage = last_pin.into();
-        dbg!(message);
-        let author = &last_pin.author;
-        // retrieve user as guild member in order to get nickname and guild avatar
-        let member = match guild_id.member(&ctx.http, author.id).await {
-            Ok(m) => Some(m),
-            Err(e) => {
-                // log error but carry on
-                eprintln!("Error getting member: {e:#}");
-                None
-            }
-        };
-        let name = member
-            .as_ref()
-            .map(|m| m.display_name())
-            .unwrap_or(&author.name);
-        let avatar = user_avatar(author, member.as_ref());
+
+        // retrieve full message in new task
+        let http = Arc::clone(&ctx.http);
+        let channel = last_pin.channel_id;
+        let msg_id = last_pin.id;
+        let msg_fut = tokio::spawn(async move { http.get_message(channel, msg_id).await });
+
+        let (name, avatar, images) = prepare_message(last_pin, guild_id, &ctx.http).await?;
+
+        // get channel / thread name to mention in footer
         let ch = channel.to_channel(&ctx.http, Some(guild_id)).await?;
         let channel_name = match &ch {
             Channel::Guild(g) => &g.base.name,
             Channel::GuildThread(t) => &t.base.name,
             _ => "unknown channel",
         };
-        // Filter attachments to find images
-        let mut images = last_pin
-            .attachments
-            .iter()
-            .filter(|at| at.height.is_some())
-            .map(|at| at.url.as_str());
+
+        // get the bot's name to put in the footer
         let self_name = handler.self_id.get().unwrap().to_user(&ctx).await?.name;
-        let mut embeds = Vec::with_capacity(last_pin.embeds.len() as usize + 1);
         let footer_str = format!("Pinned from #{channel_name} using {self_name}");
+
+        // allocate list of embeds
+        let mut embeds = Vec::with_capacity(last_pin.embeds.len() as usize + 1);
+
         // retrieve actual message in order to get potential reply
-        let msg = last_pin.channel_id.message(&ctx.http, last_pin.id).await?;
+        // and include it in the pinboard message
+        let msg = msg_fut.await??;
         if let Some(reply) = &msg.referenced_message {
-            let author = &reply.author;
-            // retrieve user as guild member in order to get nickname and guild avatar
-            let member = match guild_id.member(&ctx.http, author.id).await {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    // log error but carry on
-                    eprintln!("Error getting member: {e:#}");
-                    None
-                }
-            };
-            let name = member
-                .as_ref()
-                .map(|m| m.display_name())
-                .unwrap_or(&author.name);
-            let avatar = user_avatar(author, member.as_ref());
-            // Filter attachments to find images
-            let image = reply
-                .attachments
-                .iter()
-                .filter(|at| at.height.is_some())
-                .map(|at| at.url.as_str())
-                .next();
+            let (name, avatar, images) = prepare_message(reply, guild_id, &ctx.http).await?;
+            let image = images.first().copied();
             if !reply.content.is_empty() || image.is_some() {
                 embeds.push({
                     let mut em = CreateEmbed::new()
@@ -256,11 +281,12 @@ impl Pinboard {
             }
         }
         // put first image with the embed for message text
-        let image = images.next();
+        let image = images.first().copied();
         if !last_pin.content.is_empty() || image.is_some() {
             embeds.push({
                 let mut content = last_pin.content.to_string();
                 if !content.is_empty() {
+                    // add space for source link
                     content.push_str("\n\n");
                 }
                 _ = write!(&mut content, "[(Source)]({})", last_pin.link());
@@ -269,7 +295,7 @@ impl Pinboard {
                     .footer(CreateEmbedFooter::new(&footer_str))
                     .timestamp(last_pin.timestamp)
                     .author({
-                        let mut at = CreateEmbedAuthor::new(name).url(last_pin.link().to_string());
+                        let mut at = CreateEmbedAuthor::new(&name).url(last_pin.link().to_string());
                         if let Some(url) = avatar.as_ref() {
                             at = at.icon_url(url);
                         }
@@ -282,7 +308,7 @@ impl Pinboard {
             })
         }
         // create embeds for remaining images
-        embeds.extend(images.map(|img| {
+        embeds.extend(images.into_iter().skip(1).map(|img| {
             CreateEmbed::new()
                 .image(img)
                 .footer(CreateEmbedFooter::new(&footer_str))
@@ -301,7 +327,7 @@ impl Pinboard {
                 .await
                 .context("error getting webhook")?
                 .execute(&ctx.http, true, {
-                    let mut wh = ExecuteWebhook::new().embeds(embeds).username(name);
+                    let mut wh = ExecuteWebhook::new().embeds(embeds).username(&name);
                     if let Some(url) = avatar.as_ref() {
                         wh = wh.avatar_url(url);
                     }
@@ -346,6 +372,7 @@ const UNREGISTER_CHANNEL: CommandConst = CommandConst {
     ..command!(/unregister_channel_from_pinboard: unregister_channel)
 };
 
+/// Disable moving pins to pinboard for the channel this command is called in
 async fn unregister_channel(
     data: &Handler,
     _: &Context,
@@ -369,6 +396,7 @@ const LIST_CHANNELS: CommandConst = CommandConst {
     ..command!(/list_pinboard_channels: list_channels)
 };
 
+/// List channels for which pins will be moved to pinboard
 async fn list_channels(
     handler: &Handler,
     _: &Context,

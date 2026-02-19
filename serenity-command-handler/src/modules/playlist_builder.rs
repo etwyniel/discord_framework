@@ -299,7 +299,7 @@ async fn build_playlist_from_picks(
     increment_edition: bool,
 ) -> anyhow::Result<String> {
     let spreadsheet_id = handler
-        .get_guild_field::<Option<String>>(guild_id.get(), "playlist_sheet_id")
+        .get_guild_field::<String>(guild_id.get(), "playlist_sheet_id")
         .await?
         .ok_or_else(|| anyhow!("No playlist sheet configured for this server."))?;
     let Variables {
@@ -326,7 +326,7 @@ async fn build_playlist_from_picks(
         })
     };
     let user_id = handler
-        .get_guild_field::<Option<String>>(guild_id.get(), "spotify_user_id")
+        .get_guild_field::<String>(guild_id.get(), "spotify_user_id")
         .await?
         .ok_or_else(|| anyhow!("No Spotify user ID configured for this server."))?;
     let edition = edition + if increment_edition { 1 } else { 0 };

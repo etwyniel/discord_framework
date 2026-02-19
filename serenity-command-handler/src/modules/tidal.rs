@@ -16,11 +16,13 @@ use crate::{
 mod model;
 pub use model::*;
 
+/// Tidal authentication token
 struct Token {
     value: String,
     expiration: DateTime<Local>,
 }
 
+/// Tidal API client
 pub struct Tidal {
     client_id: String,
     client_secret: String,
@@ -28,6 +30,7 @@ pub struct Tidal {
     client: Client,
 }
 
+/// Parse an HTTP response as an error or as a `T`
 async fn parse_response<T: DeserializeOwned>(resp: reqwest::Response) -> anyhow::Result<T> {
     if resp.status().is_client_error() {
         let err_resp = resp.json::<ErrorResponse>().await?;
@@ -43,6 +46,8 @@ async fn parse_response<T: DeserializeOwned>(resp: reqwest::Response) -> anyhow:
 }
 
 impl Tidal {
+    /// Create a new Tidal API client using the `TIDAL_CLIENT_ID` and
+    /// `TIDAL_CLIENT_SECRET` environment variables.
     pub fn from_env() -> anyhow::Result<Self> {
         let client_id = env::var("TIDAL_CLIENT_ID").context("missing TIDAL_CLIENT_ID")?;
         let client_secret =
@@ -51,6 +56,8 @@ impl Tidal {
         Ok(Self::new(client_id, client_secret))
     }
 
+    /// Get an API token for tidal. Performs authentication if
+    /// the stored token is expired or absent.
     pub async fn get_token(&self) -> anyhow::Result<String> {
         if let Some(Token { value, expiration }) = self.token.read().await.as_ref()
             && *expiration - Local::now() > chrono::Duration::hours(1)
@@ -77,6 +84,7 @@ impl Tidal {
         Ok(self.token.write().await.insert(token).value.to_owned())
     }
 
+    /// Creates a request to a Tidal API endpoint with the specified method.
     async fn request(&self, method: Method, url: &str) -> anyhow::Result<reqwest::RequestBuilder> {
         let token = self.get_token().await?;
         let req = self
@@ -87,6 +95,7 @@ impl Tidal {
         Ok(req)
     }
 
+    /// Create a Tidal API client
     pub fn new(client_id: String, client_secret: String) -> Self {
         let client = reqwest::Client::new();
         Tidal {

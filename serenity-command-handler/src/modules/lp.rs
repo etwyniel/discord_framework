@@ -60,6 +60,7 @@ pub struct ResolvedLp {
     pub params: Lp,
 }
 
+/// Format an LP's start and end time for a discord message.
 fn format_time(
     time_param: Option<&str>,
     resolved_start: Option<DateTime<Utc>>,
@@ -77,11 +78,13 @@ fn format_time(
 }
 
 impl ResolvedLp {
+    /// Format an LP's start and end time for a discord message.
     fn format_time(&self, duration: Option<Duration>) -> String {
         let time_param = self.params.time.as_deref();
         format_time(time_param, self.resolved_start, duration)
     }
 
+    /// Build a discord message for the Listening Party.
     fn build_message_contents(
         &self,
         info: &Album,
@@ -155,6 +158,7 @@ pub struct Lp {
     pub role: Option<RoleId>,
 }
 
+/// Format the end time of a Listening Party.
 fn format_end(start: DateTime<Utc>, duration: Option<Duration>) -> String {
     let Some(duration) = duration else {
         return String::new();
@@ -163,6 +167,7 @@ fn format_end(start: DateTime<Utc>, duration: Option<Duration>) -> String {
     format!(" -> <t:{}:t>", end.timestamp())
 }
 
+/// Get a list of genre tags for `info`, querying from last.fm if none are present.
 async fn get_lastfm_genres(handler: &Handler, info: &Album) -> Option<Vec<String>> {
     if info.is_playlist || !info.genres.is_empty() {
         return None;
@@ -201,6 +206,7 @@ fn build_message_contents(
     resolved.build_message_contents(info, role_id, desc)
 }
 
+/// Find an album's metadata from it name or link.
 async fn find_album<'a>(
     handler: &Handler,
     album: &'a str,
@@ -236,6 +242,7 @@ async fn find_album<'a>(
     Ok((lp_name, info))
 }
 
+/// Resolve a relative time (e.g. `+5`, `XX:20`) to a UTC timestamp.
 fn resolve_time(time: Option<&str>) -> Option<DateTime<Utc>> {
     let mut lp_time = Utc::now().add(Duration::seconds(10));
     let time = match time {
@@ -280,10 +287,12 @@ fn resolve_time(time: Option<&str>) -> Option<DateTime<Utc>> {
 }
 
 impl Lp {
+    /// Resolve the supplied relative start time of this Listening Party.
     fn resolve_time(&self) -> Option<DateTime<Utc>> {
         resolve_time(self.time.as_deref())
     }
 
+    /// Resolve a Listening Party's album metadata and start time.
     async fn resolve(
         mut self,
         handler: &Handler,
@@ -308,17 +317,16 @@ impl Lp {
         if let Some(genres) = get_lastfm_genres(handler, &info).await {
             info.genres = genres
         }
-        let role_id = if let Some(r) = role {
-            *r
+        let role_id = if role.is_some() {
+            *role
         } else {
-            RoleId::new(
-                handler
-                    .get_guild_field(guild_id.get(), "role_id")
-                    .await
-                    .context("error retrieving LP role")?,
-            )
+            handler
+                .get_guild_field(guild_id.get(), "role_id")
+                .await
+                .context("error retrieving LP role")?
+                .map(RoleId::new)
         };
-        self.role = Some(role_id);
+        self.role = role_id;
         let resolved_start = self.resolve_time();
         let resolved = ResolvedLp {
             resolved_start,
@@ -369,9 +377,10 @@ impl Lp {
         Ok((resp_content, role_id, info))
     }
 
-    // Send LP message through webhook
-    // This lets us impersonate the user who sent the command,
-    // displaying their username and avatar
+    /// Send LP message through webhook.
+    ///
+    /// This lets us impersonate the user who sent the command,
+    /// displaying their username and avatar
     async fn send_message_webhook(
         wh: &Webhook,
         http: &Http,
@@ -400,6 +409,7 @@ impl Lp {
         Ok(msg)
     }
 
+    /// Send the Listening Party message.
     async fn send_message_interaction(
         http: &Http,
         interaction: &InteractionInfo<'_>,
@@ -447,6 +457,7 @@ impl Lp {
         Ok(msg)
     }
 
+    /// Create the Listening Party thread, if configured to do so.
     pub async fn create_thread(
         handler: &Handler,
         http: &Http,
@@ -455,10 +466,10 @@ impl Lp {
         guild_id: GuildId,
         webhook: Option<&str>,
     ) -> anyhow::Result<Option<String>> {
-        if !handler
+        let should_create_threads = handler
             .get_guild_field(guild_id.get(), "create_threads")
-            .await?
-        {
+            .await?;
+        if should_create_threads != Some(true) {
             return Ok(None);
         }
         // Create a thread from the response message for the LP to take place in
