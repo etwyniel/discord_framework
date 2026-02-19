@@ -187,7 +187,7 @@ pub struct ModAutoreacts {
 }
 
 impl ModAutoreacts {
-    pub async fn add_reacts(&self, ctx: &Context, msg: Message) -> anyhow::Result<()> {
+    pub async fn add_reacts(&self, ctx: &Context, msg: &Message) -> anyhow::Result<()> {
         let mut lower = msg.content.to_lowercase();
         lower.push_str(
             &msg.embeds
@@ -278,7 +278,7 @@ impl ModAutoreacts {
     }
 }
 
-pub async fn add_reacts(handler: &Handler, ctx: &Context, msg: Message) -> anyhow::Result<()> {
+pub async fn add_reacts(handler: &Handler, ctx: &Context, msg: &Message) -> anyhow::Result<()> {
     handler
         .module::<ModAutoreacts>()?
         .add_reacts(ctx, msg)

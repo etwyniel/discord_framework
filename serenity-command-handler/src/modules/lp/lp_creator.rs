@@ -511,8 +511,8 @@ async fn button_edit_lp(
         return CommandResponse::private("no embedded data");
     };
     let url: Url = msg.content[pos..]
-        .trim_end_matches(')')
-        .parse()
+        .split_once(')')
+        .and_then(|(url, _)| url.parse().ok())
         .context("invalid embedded URL")?;
     let lp: ResolvedLp = serde_urlencoded::de::from_str(url.query().unwrap_or_default())
         .context("failed to deserialize embedded data")?;

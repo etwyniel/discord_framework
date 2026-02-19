@@ -30,8 +30,8 @@ use serenity::all::{
 
 use crate::album::Album;
 use crate::command_context::{
-    InteractionExt, InteractionInfo, Responder, create_response_with_token,
-    get_focused_option, get_str_opt_ac,
+    InteractionExt, InteractionInfo, Responder, create_response_with_token, get_focused_option,
+    get_str_opt_ac,
 };
 use crate::modules::{Bandcamp, Lastfm, Spotify};
 use crate::prelude::*;
@@ -118,6 +118,14 @@ impl ResolvedLp {
             }
             _ = write!(&mut resp_content, "{}", &genres);
         }
+        // encode resolved LP as a URL to hide in the LP message
+        // can be retrieved later when editing
+        let encoded_data = serde_urlencoded::ser::to_string(self).unwrap();
+        let mut encoded_data_url = Url::parse(LP_URI).unwrap();
+        encoded_data_url.set_query(Some(&encoded_data));
+        let data: String = encoded_data_url.into();
+        _ = write!(&mut resp_content, "[̣]({data})"); // hyperlink on a barely visible character
+
         if let Some(desc) = desc {
             resp_content.push_str("\n\n");
             // add separator so description can be retrieved easily when editing LP
@@ -134,13 +142,6 @@ impl ResolvedLp {
                 resp_content.push_str(track_info.trim());
             }
         }
-        // encode resolved LP as a URL to hide in the LP message
-        // can be retrieved later when editing
-        let encoded_data = serde_urlencoded::ser::to_string(self).unwrap();
-        let mut encoded_data_url = Url::parse(LP_URI).unwrap();
-        encoded_data_url.set_query(Some(&encoded_data));
-        let data: String = encoded_data_url.into();
-        _ = write!(&mut resp_content, "[̣]({data})"); // hyperlink on a barely visible character
         Ok(resp_content)
     }
 }
@@ -659,8 +660,8 @@ impl EditLp {
             bail!("no embedded data");
         };
         let url: Url = msg.content[pos..]
-            .trim_end_matches(')')
-            .parse()
+            .split_once(')')
+            .and_then(|(url, _)| url.parse().ok())
             .context("invalid embedded URL")?;
         let mut lp: ResolvedLp = serde_urlencoded::de::from_str(url.query().unwrap_or_default())
             .context("failed to deserialize embedded data")?;
@@ -860,8 +861,8 @@ async fn edit_listening_party(
         return CommandResponse::private("no embedded data");
     };
     let url: Url = msg.content[pos..]
-        .trim_end_matches(')')
-        .parse()
+        .split_once(')')
+        .and_then(|(url, _)| url.parse().ok())
         .context("invalid embedded URL")?;
     let lp: ResolvedLp = serde_urlencoded::de::from_str(url.query().unwrap_or_default())
         .context("failed to deserialize embedded data")?;
