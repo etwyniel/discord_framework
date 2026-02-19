@@ -1,4 +1,5 @@
 use iso8601_duration::Duration;
+
 use serde::Deserialize;
 
 use crate::album::{Album, Track};
@@ -223,6 +224,14 @@ impl AlbumAttributes {
     }
 }
 
+/// Returns a tracks's volume number and track number, for sorting.
+fn track_ordering(item: &Relationship) -> Option<(i64, i64)> {
+    let meta = item.meta.as_ref()?;
+    let volume = meta.get("volumeNumber")?.as_i64()?;
+    let track = meta.get("trackNumber")?.as_i64()?;
+    Some((volume, track))
+}
+
 impl Response<AlbumAttributes> {
     pub fn into_album(self) -> Album {
         let Response { data, included } = self;
@@ -232,7 +241,13 @@ impl Response<AlbumAttributes> {
             relationships,
             ..
         } = data;
-        let AlbumRelationships { artists, items, .. } = relationships;
+        let AlbumRelationships {
+            artists, mut items, ..
+        } = relationships;
+        // sort tracks by track number
+        items
+            .data
+            .sort_by_key(|item| track_ordering(item).unwrap_or_default());
         attributes.into_album(id, &artists.data, &items.data, included)
     }
 }

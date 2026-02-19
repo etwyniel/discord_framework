@@ -3,7 +3,7 @@ use std::{collections::HashMap, env};
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Local};
 use futures::TryFutureExt;
-use reqwest::{self, Client, Method};
+use reqwest::{self, Client, Method, Url};
 use serde::de::DeserializeOwned;
 use serenity::async_trait;
 use tokio::sync::RwLock;
@@ -104,6 +104,54 @@ impl Tidal {
             client,
             token: RwLock::default(),
         }
+    }
+
+    pub fn search_uri(query: &str, ty: Option<&str>) -> Url {
+        let mut uri = Url::parse(&format!("{BASE}/searchResults")).unwrap();
+        {
+            let mut path = uri.path_segments_mut().unwrap();
+            path.push(query);
+            if let Some(ty) = ty {
+                path.push("relationships").push(ty);
+            }
+        }
+        if let Some(ty) = ty {
+            uri.set_query(Some(&format!("include={ty}")));
+        }
+        uri
+    }
+
+    pub async fn get_album(&self, artist: &str, name: &str) -> anyhow::Result<Option<Album>> {
+        let albums_uri = Self::search_uri(&format!("{artist} {name}"), Some("albums"));
+        let resp = self
+            .request(Method::GET, albums_uri.as_str())
+            .await?
+            .send()
+            .await?
+            .error_for_status()?;
+        let albums_resp: MultiResponse<Relationship> = resp.json().await?;
+        for rel in &albums_resp.data {
+            let Some(album) = albums_resp.included.iter().find_map(|inc| {
+                if inc.id != rel.id {
+                    return None;
+                }
+                let IncludedEntity::Album(album) = &inc.entity else {
+                    return None;
+                };
+                Some(album)
+            }) else {
+                continue;
+            };
+            if album.title == name {
+                let ab = Album {
+                    name: Some(album.title.to_string()),
+                    release_date: album.release_date.clone(),
+                    ..Default::default()
+                };
+                return Ok(Some(ab));
+            }
+        }
+        Ok(None)
     }
 }
 
