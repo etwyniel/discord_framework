@@ -184,9 +184,9 @@ impl RegisterableModule for AlbumLookup {
     async fn init(m: &ModuleMap) -> anyhow::Result<Self> {
         Ok(AlbumLookup {
             providers: vec![
-                m.module_arc::<Spotify>()?,
-                m.module_arc::<Bandcamp>()?,
                 m.module_arc::<Tidal>()?,
+                m.module_arc::<Bandcamp>()?,
+                m.module_arc::<Spotify>()?,
             ],
         })
     }
