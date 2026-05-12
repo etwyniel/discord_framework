@@ -342,7 +342,7 @@ pub fn get_text_input_value<'a>(components: &'a [ModalComponent], id: &'_ str) -
             return None;
         };
         if t.custom_id == id {
-            t.value.as_deref()
+            Some(t.value.as_str())
         } else {
             None
         }

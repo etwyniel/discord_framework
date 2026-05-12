@@ -218,7 +218,7 @@ impl CommandDataExt for ModalInteractionData {
             };
             match &label.component {
                 LabelComponent::InputText(text) if text.custom_id == field => {
-                    return T::from_str(text.value.as_deref()?);
+                    return T::from_str(text.value.as_str());
                 }
                 LabelComponent::SelectMenu(select) if select.custom_id == field => {
                     if select.values.len() == 1 {
