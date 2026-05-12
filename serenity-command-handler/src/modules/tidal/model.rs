@@ -34,7 +34,7 @@ pub struct RelationshipsData {
 #[derive(Deserialize, Debug)]
 pub struct AlbumRelationships {
     pub artists: RelationshipsData,
-    pub genres: RelationshipsData,
+    pub genres: Option<RelationshipsData>,
     #[serde(rename = "coverArt")]
     pub cover_art: RelationshipsData,
     pub items: RelationshipsData,
