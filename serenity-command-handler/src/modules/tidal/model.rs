@@ -36,8 +36,8 @@ pub struct AlbumRelationships {
     pub artists: RelationshipsData,
     pub genres: Option<RelationshipsData>,
     #[serde(rename = "coverArt")]
-    pub cover_art: RelationshipsData,
-    pub items: RelationshipsData,
+    pub cover_art: Option<RelationshipsData>,
+    pub items: Option<RelationshipsData>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -241,13 +241,10 @@ impl Response<AlbumAttributes> {
             relationships,
             ..
         } = data;
-        let AlbumRelationships {
-            artists, mut items, ..
-        } = relationships;
+        let AlbumRelationships { artists, items, .. } = relationships;
         // sort tracks by track number
-        items
-            .data
-            .sort_by_key(|item| track_ordering(item).unwrap_or_default());
-        attributes.into_album(id, &artists.data, &items.data, included)
+        let mut tracks = items.map(|items| items.data).unwrap_or_default();
+        tracks.sort_by_key(|item| track_ordering(item).unwrap_or_default());
+        attributes.into_album(id, &artists.data, &tracks, included)
     }
 }
