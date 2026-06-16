@@ -384,7 +384,7 @@ impl Lastfm {
             }
         }
         let mut out = Vec::with_capacity(aotys.len());
-        for (album, fut) in aotys.into_iter().zip(img_futures.into_iter()) {
+        for (album, fut) in aotys.into_iter().zip(img_futures) {
             let image = fut.await?.ok().flatten();
             out.push(AlbumWithImage { album, image })
         }

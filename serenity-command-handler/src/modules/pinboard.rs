@@ -58,10 +58,10 @@ pub fn copy_embed(em: &Embed) -> CreateEmbed<'_> {
         out = out.footer(f);
     }
     if let Some(img) = &em.image {
-        out = out.image(&img.url);
+        out = out.image(&img.url, None);
     }
     if let Some(thumbnail) = &em.thumbnail {
-        out = out.thumbnail(&thumbnail.url);
+        out = out.thumbnail(&thumbnail.url, None);
     }
     if let Some(ts) = em.timestamp {
         out = out.timestamp(ts);
@@ -274,7 +274,7 @@ impl Pinboard {
                         })
                         .url(reply.link().to_string());
                     if let Some(img) = image {
-                        em = em.image(img);
+                        em = em.image(img, None);
                     }
                     em
                 })
@@ -302,7 +302,7 @@ impl Pinboard {
                         at
                     });
                 if let Some(url) = image {
-                    em = em.image(url);
+                    em = em.image(url, None);
                 }
                 em
             })
@@ -310,7 +310,7 @@ impl Pinboard {
         // create embeds for remaining images
         embeds.extend(images.into_iter().skip(1).map(|img| {
             CreateEmbed::new()
-                .image(img)
+                .image(img, None)
                 .footer(CreateEmbedFooter::new(&footer_str))
                 .timestamp(last_pin.timestamp)
         }));

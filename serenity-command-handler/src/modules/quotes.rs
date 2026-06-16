@@ -529,13 +529,13 @@ impl GetQuote {
 
         let mut has_image = false;
         if let Some(image) = quote.image {
-            create = create.image(image);
+            create = create.image(image, None);
             has_image = true;
         }
         let mut attachments = vec![];
         for (i, att) in quote.attachments.into_iter().enumerate() {
             if att.ty == AttachmentType::Image && !has_image {
-                create = create.image(att.url.clone());
+                create = create.image(att.url.clone(), None);
                 has_image = true;
                 continue;
             }
@@ -691,13 +691,13 @@ pub async fn send_qotd(
     // build attachments
     let mut has_image = false;
     if let Some(image) = qotd.image {
-        embed = embed.image(image);
+        embed = embed.image(image, None);
         has_image = true;
     }
     let mut attachments = vec![];
     for (i, att) in qotd.attachments.iter().enumerate() {
         if att.ty == AttachmentType::Image && !has_image {
-            embed = embed.image(&att.url);
+            embed = embed.image(&att.url, None);
             has_image = true;
             continue;
         }
