@@ -150,7 +150,7 @@ pub fn column_as_string(val: ValueRef<'_>) -> rusqlite::Result<String> {
         ValueRef::Real(r) => r.to_string(),
         ValueRef::Integer(i) => i.to_string(),
         ValueRef::Text(b) | ValueRef::Blob(b) => std::str::from_utf8(b)
-            .map_err(rusqlite::Error::Utf8Error)?
+            .map_err(|e| rusqlite::Error::Utf8Error(0, e))?
             .to_string(),
     })
 }

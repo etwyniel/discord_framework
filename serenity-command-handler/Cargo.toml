@@ -12,7 +12,7 @@ workspace = true
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 rspotify = { version = "0.15", features = ["cli"] }
 rspotify-http = "0.15"
-rusqlite = { version = "0.38", features = ["chrono", "bundled", "fallible_uint"] }
+rusqlite = { version = "0.40", features = ["chrono", "bundled", "fallible_uint"] }
 regex = "1.6"
 anyhow = "1.0"
 serenity-command = { version = "0.1.0", path = "../serenity-command" }
@@ -20,12 +20,12 @@ reqwest = { version = "0.13", features = ["json", "form", "query"] }
 chrono = "0.4.24"
 futures = "0.3.27"
 image = "0.25"
-itertools = "0.14"
+itertools = "0.15"
 serde = "1.0.156"
 tokio-stream = "0.1.12"
-scraper = "0.25.0"
+scraper = "0.27.0"
 fallible-iterator = "0.3.0"
-rand = "0.8.5"
+rand = "0.10"
 markov = "1.1.0"
 typemap_rev = "0.4"
 serde_urlencoded = "0.7.1"

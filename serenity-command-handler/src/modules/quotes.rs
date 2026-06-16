@@ -286,7 +286,7 @@ pub fn get_random_quote(
         if numbers.is_empty() {
             bail!("No quotes saved");
         }
-        numbers[rand::random::<usize>() % numbers.len()]
+        numbers[rand::random::<u64>() as usize % numbers.len()]
     };
     fetch_quote(db, guild_id, number)
 }
@@ -511,7 +511,7 @@ impl GetQuote {
         };
         if hide_author {
             let hide_author_re = Regex::new("(<@\\d+>)").unwrap();
-            let padding = random::<usize>() % 10;
+            let padding = random::<u64>() as usize % 10;
             let mut patt = "||$1`".to_string();
             patt.push_str(&" ".repeat(padding));
             patt.push_str("`||");

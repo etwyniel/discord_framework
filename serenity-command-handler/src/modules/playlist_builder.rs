@@ -2,7 +2,7 @@ use std::{fmt::Write, ops::Not, sync::Arc};
 
 use anyhow::{Context as _, anyhow, bail};
 use chrono::Utc;
-use rand::{seq::SliceRandom, thread_rng};
+use rand::{rng, seq::SliceRandom};
 use reqwest::{Url, redirect::Policy};
 use rspotify::{
     model::{Id, PlaylistId, TrackId, UserId},
@@ -313,7 +313,7 @@ async fn build_playlist_from_picks(
         return Ok("No new picks to add".to_string());
     }
     {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         picks.shuffle(&mut rng);
     }
     let playlist_id = if increment_edition {
