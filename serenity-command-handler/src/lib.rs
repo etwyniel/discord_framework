@@ -5,7 +5,6 @@ use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Instant};
 use anyhow::{Context as _, anyhow, bail};
 use bot_management::ModManagement;
 use rusqlite::Connection;
-pub use serenity; // re-export
 use serenity::all::{ComponentInteraction, CreateInteractionResponse, ModalInteraction};
 use serenity::model::prelude::{GuildId, UserId};
 use serenity::{
@@ -20,6 +19,8 @@ use serenity::{
 use tokio::sync::OnceCell;
 use typemap_rev::{TypeMap, TypeMapKey};
 
+pub use serenity; // re-export
+
 use serenity_command::{CommandKey, CommandResponse};
 
 pub mod album;
@@ -33,6 +34,7 @@ use db::Db;
 
 use command_context::Responder;
 
+// Define concrete types from the generics defined in serenity_command
 pub type CommandConst = serenity_command::CommandConst<Handler>;
 pub type CommandStore = serenity_command::CommandStore<'static, Handler>;
 pub type ModalCommandConst = serenity_command::ModalCommandConst<Handler>;
@@ -46,7 +48,7 @@ type SpecialCommand = for<'a> fn(
     &'a CommandInteraction,
 ) -> BoxFuture<'a, anyhow::Result<CommandResponse>>;
 
-// Format command options for debug output
+/// Format command options for debug output
 fn format_options(opts: &[CommandDataOption]) -> String {
     let mut out = String::new();
     for (i, opt) in opts.iter().enumerate() {
@@ -125,7 +127,7 @@ pub struct Handler {
     pub completion_handlers: CompletionStore,
     pub default_command_handler: Option<SpecialCommand>,
     pub self_id: OnceCell<UserId>,
-    pub event_handlers: Arc<events::EventHandlers>,
+    pub event_dispatcher: Arc<events::EventDispatcher>,
 }
 
 impl Handler {
@@ -142,7 +144,7 @@ impl Handler {
             special_commands: Default::default(),
             completion_handlers: Default::default(),
             default_command_handler: None,
-            event_handlers: events::EventHandlers::default(),
+            event_dispatcher: events::EventDispatcher::default(),
         };
         // register default module(s)
         builder = builder.module::<ModManagement>().await.unwrap();
@@ -235,7 +237,7 @@ impl Handler {
                 guild
                     .to_partial_guild(&ctx.http)
                     .await
-                    .map(|guild| format!("[{}] ", &guild.name))
+                    .map(|guild| format!("[{}] ", guild.name))
                     .unwrap_or_default()
             } else {
                 String::new()
@@ -250,7 +252,7 @@ impl Handler {
             let elapsed = start.elapsed();
             eprintln!(
                 "{guild_name}{user}: /{name} -({:.1?})-> {:?}",
-                elapsed, &resp
+                elapsed, resp
             );
             let resp = match resp {
                 Ok(resp) => resp,
@@ -266,7 +268,7 @@ impl Handler {
                 guild
                     .to_partial_guild(&ctx.http)
                     .await
-                    .map(|guild| format!("[{}] ", &guild.name))
+                    .map(|guild| format!("[{}] ", guild.name))
                     .unwrap_or_default()
             } else {
                 String::new()
@@ -279,7 +281,7 @@ impl Handler {
             let elapsed = start.elapsed();
             eprintln!(
                 "{guild_name}{user}: |>{name} -({:.1?})-> {:?}",
-                elapsed, &resp
+                elapsed, resp
             );
             let resp = match resp {
                 Ok(CommandResponse::Ack) => {
@@ -301,7 +303,7 @@ impl Handler {
                 guild
                     .to_partial_guild(&ctx.http)
                     .await
-                    .map(|guild| format!("[{}] ", &guild.name))
+                    .map(|guild| format!("[{}] ", guild.name))
                     .unwrap_or_default()
             } else {
                 String::new()
@@ -314,7 +316,7 @@ impl Handler {
             let elapsed = start.elapsed();
             eprintln!(
                 "{guild_name}{user}: [>{name} -({:.1?})-> {:?}",
-                elapsed, &resp
+                elapsed, resp
             );
             let resp = match resp {
                 Ok(CommandResponse::Ack) => {
@@ -334,26 +336,6 @@ impl Handler {
     }
 }
 
-// pub trait CommandStorer {
-//     fn register(&mut self, command: CommandConst);
-// }
-//
-// pub trait ModalCommandStorer {
-//     fn register(&mut self, command: ModalCommandConst);
-// }
-//
-// pub trait ComponentCommandStorer {
-//     fn register(&mut self, command: ComponentCommandConst);
-// }
-//
-// pub trait CompletionStorer {
-//     fn register(&mut self, completion: CompletionHandler);
-// }
-
-pub trait TStorer<T> {
-    fn register(&mut self, val: T);
-}
-
 pub struct HandlerBuilder {
     pub db: Db,
     pub management_guild: GuildId,
@@ -365,7 +347,11 @@ pub struct HandlerBuilder {
     pub special_commands: HashMap<String, SpecialCommand>,
     pub completion_handlers: CompletionStore,
     pub default_command_handler: Option<SpecialCommand>,
-    pub event_handlers: events::EventHandlers,
+    pub event_dispatcher: events::EventDispatcher,
+}
+
+pub trait TStorer<T> {
+    fn register(&mut self, val: T);
 }
 
 impl TStorer<CommandConst> for HandlerBuilder {
@@ -403,6 +389,7 @@ pub trait Storer:
 impl Storer for HandlerBuilder {}
 
 impl HandlerBuilder {
+    /// Register the module of type M
     pub async fn module<M: RegisterableModule>(mut self) -> anyhow::Result<Self> {
         if self.modules.contains::<M>() {
             return Ok(self);
@@ -412,12 +399,13 @@ impl HandlerBuilder {
         m.setup(&mut self.db).await?;
         m.register_commands(&mut self);
         let module: Arc<M> = m.into();
-        Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
+        Arc::clone(&module).register_event_handlers(&mut self.event_dispatcher);
         self.modules.add(Arc::clone(&module));
         self.module_list.push(module.as_trait());
         Ok(self)
     }
 
+    /// Register pre-instantiated module of type M
     pub async fn with_module<M: RegisterableModule>(mut self, mut m: M) -> anyhow::Result<Self> {
         if self.modules.contains::<M>() {
             return Ok(self);
@@ -426,7 +414,7 @@ impl HandlerBuilder {
         m.setup(&mut self.db).await?;
         m.register_commands(&mut self);
         let module: Arc<M> = m.into();
-        Arc::clone(&module).register_event_handlers(&mut self.event_handlers);
+        Arc::clone(&module).register_event_handlers(&mut self.event_dispatcher);
         self.modules.add(Arc::clone(&module));
         self.module_list.push(module.as_trait());
         Ok(self)
@@ -449,7 +437,7 @@ impl HandlerBuilder {
             special_commands,
             completion_handlers,
             default_command_handler,
-            event_handlers,
+            event_dispatcher,
         } = self;
         Arc::new_cyclic(|me| Handler {
             me: me.clone(),
@@ -465,7 +453,7 @@ impl HandlerBuilder {
             completion_handlers,
             default_command_handler,
             self_id: OnceCell::default(),
-            event_handlers: Arc::new(event_handlers),
+            event_dispatcher: Arc::new(event_dispatcher),
         })
     }
 }
@@ -477,7 +465,7 @@ pub trait Module: 'static + Send + Sync {
     }
     fn register_commands(&self, _store: &mut dyn Storer) {}
 
-    fn register_event_handlers(self: Arc<Self>, _handlers: &mut events::EventHandlers) {}
+    fn register_event_handlers(self: Arc<Self>, _handlers: &mut events::EventDispatcher) {}
 
     fn autocompletes(&self) -> &'static [&'static str] {
         &[]
@@ -486,6 +474,8 @@ pub trait Module: 'static + Send + Sync {
     fn start(&self, _ctx: &Context, _data_about_bot: &serenity::model::gateway::Ready) {}
 }
 
+/// Supertrait of Module that adds initialization methods.
+/// Those are not defined in Module in order to keep it dyn safe
 #[allow(async_fn_in_trait)]
 pub trait RegisterableModule: Module + Sized {
     async fn init(m: &ModuleMap) -> anyhow::Result<Self>;
@@ -499,16 +489,13 @@ pub trait RegisterableModule: Module + Sized {
     }
 }
 
-pub trait ModuleKey {
-    type Module: Module;
-}
-
 struct KeyWrapper<T>(PhantomData<T>);
 
 impl<T: 'static + Send + Sync + Module> TypeMapKey for KeyWrapper<T> {
     type Value = Arc<T>;
 }
 
+/// Prelude for typical framework use
 pub mod prelude {
     pub use super::{
         CommandConst, CommandStore, CompletionHandler, CompletionStore, ComponentCommandConst,

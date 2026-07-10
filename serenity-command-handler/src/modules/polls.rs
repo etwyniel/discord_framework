@@ -122,7 +122,7 @@ async fn create_poll(
     handler: &Handler,
     ctx: &Context,
     interaction: &CommandInteraction,
-    event_handlers: Arc<events::EventHandlers>,
+    event_dispatcher: Arc<events::EventDispatcher>,
 ) -> anyhow::Result<()> {
     let module: &ModPoll = handler.module()?;
     let http = &ctx.http;
@@ -164,7 +164,7 @@ async fn create_poll(
     // add reacts to interaction response
     resp.react(http, ReactionType::from_str(&module.yes)?)
         .await
-        .context(format!("error adding yes react: {}", &module.yes))?;
+        .context(format!("error adding yes react: {}", module.yes))?;
     resp.react(http, ReactionType::from_str(&module.no)?)
         .await
         .context("error adding no react")?;
@@ -186,7 +186,7 @@ async fn create_poll(
         // resp,
         pending_poll,
         receiver,
-        event_handlers,
+        event_dispatcher,
     ));
     Ok(())
 }
@@ -208,7 +208,7 @@ impl ReadyPoll {
             handler,
             ctx,
             interaction,
-            Arc::clone(&handler.event_handlers),
+            Arc::clone(&handler.event_dispatcher),
         )
         .await
     }
@@ -242,7 +242,7 @@ impl Poll {
             handler,
             ctx,
             interaction,
-            Arc::clone(&handler.event_handlers),
+            Arc::clone(&handler.event_dispatcher),
         )
         .await
     }
@@ -323,7 +323,7 @@ async fn poll_task(
     http: Arc<Http>,
     poll: PendingPoll,
     mut r: Receiver<PollEvent>,
-    event_handlers: Arc<events::EventHandlers>,
+    event_dispatcher: Arc<events::EventDispatcher>,
 ) {
     // poll state
     let mut users_yes = Vec::new(); // list of users who have clicked the YES react
@@ -383,7 +383,7 @@ async fn poll_task(
                         poll.msg.channel_id,
                         count_emote.as_deref(),
                         go_emote.as_deref(),
-                        &event_handlers,
+                        &event_dispatcher,
                     )
                     .await;
                     if let Err(e) = res {
@@ -430,7 +430,7 @@ pub async fn crabdown(
     channel: GenericChannelId,
     count_emote: Option<&str>,
     go_emote: Option<&str>,
-    event_handler: &events::EventHandlers,
+    event_handler: &events::EventDispatcher,
 ) -> anyhow::Result<()> {
     // announce countdown is starting, wait briefly
     channel.say(http, "Starting 3s countdown").await?;

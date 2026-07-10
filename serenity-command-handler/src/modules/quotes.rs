@@ -460,7 +460,7 @@ async fn create_quote_embed(http: &Http, quote: &Quote) -> anyhow::Result<QuoteE
         .to_owned();
     let contents = format!(
         "{}\n- <@{}> [(Source)]({})",
-        &quote.contents, quote.author_id, message_url
+        quote.contents, quote.author_id, message_url
     );
     let author_avatar = UserId::new(quote.author_id)
         .to_user(http)
@@ -505,7 +505,7 @@ impl GetQuote {
         let hide_author = self.hide_author == Some(true);
         let quote_header = match (self.user, self.number, hide_author) {
             (_, Some(_), _) => "".to_string(), // Set quote number, not random
-            (Some(_), _, false) => format!(" - Random quote from {}", &quote.author_name),
+            (Some(_), _, false) => format!(" - Random quote from {}", quote.author_name),
             (Some(_), _, true) => " - Random quote from REDACTED".to_string(),
             (None, None, _) => " - Random quote".to_string(),
         };

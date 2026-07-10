@@ -81,13 +81,13 @@ impl GetSotys {
             .map(|song| {
                 format!(
                     "**{}** - *{}* ({} plays)",
-                    &song.artist.name, &song.name, &song.playcount
+                    song.artist.name, song.name, song.playcount
                 )
             })
             .join("\n");
         let embed = CreateEmbed::default()
             .description(content)
-            .title(format!("Top songs of {year} for {}", &self.username));
+            .title(format!("Top songs of {year} for {}", self.username));
         opts.edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
             .await?;
         Ok(())

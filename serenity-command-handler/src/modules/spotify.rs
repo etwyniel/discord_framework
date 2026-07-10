@@ -103,10 +103,10 @@ impl<C: BaseClient> Spotify<C> {
         let name = playlist.name.clone();
         let artist = playlist.owner.display_name;
         let duration = playlist
-            .tracks
+            .items
             .items
             .iter()
-            .flat_map(|item| item.track.as_ref())
+            .flat_map(|item| item.item.as_ref())
             .map(|track| match track {
                 PlayableItem::Track(FullTrack { duration, .. })
                 | PlayableItem::Episode(FullEpisode { duration, .. }) => *duration,
@@ -245,8 +245,8 @@ impl<C: BaseClient> Spotify<C> {
     pub async fn get_album(&self, artist: &str, name: &str) -> anyhow::Result<Option<Album>> {
         let query = format!(
             r#"album:"{}" artist:"{}""#,
-            &sanitize_string(name),
-            &sanitize_string(artist)
+            sanitize_string(name),
+            sanitize_string(artist)
         );
         let res = self
             .client

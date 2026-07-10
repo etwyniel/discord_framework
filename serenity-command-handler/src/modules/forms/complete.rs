@@ -40,7 +40,7 @@ async fn get_now_playing(
     let name = format!(
         "{} - {}",
         Spotify::artists_to_string(&track.artists),
-        &track.name
+        track.name
     );
     let url = format!(
         "https://open.spotify.com/track/{}",

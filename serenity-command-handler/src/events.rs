@@ -4,13 +4,13 @@ use std::marker::PhantomData;
 use tokio;
 use typemap_rev::{TypeMap, TypeMapKey};
 
-// Events are identified by their type (e.g. `StartPollStarted`)
-// We store a map of types to list of handlers where a handler is simply a
-// closure that takes a ref of the event as an argument
+/// Events are identified by their type (e.g. `StartPollStarted`)
+/// We store a map of types to list of handlers where a handler is simply a
+/// closure that takes a ref of the event as an argument
 type Handler<E> = dyn Fn(&E) -> BoxFuture<'static, ()> + Send + Sync;
 
 #[derive(Default)]
-pub struct EventHandlers(TypeMap);
+pub struct EventDispatcher(TypeMap);
 
 struct EventHandlerKey<E>(PhantomData<Handler<E>>);
 
@@ -18,7 +18,7 @@ impl<E: 'static> TypeMapKey for EventHandlerKey<E> {
     type Value = Vec<Box<Handler<E>>>;
 }
 
-impl EventHandlers {
+impl EventDispatcher {
     pub fn add_handler<E: 'static, F: Fn(&E) -> BoxFuture<'static, ()> + Send + Sync + 'static>(
         &mut self,
         handler: F,

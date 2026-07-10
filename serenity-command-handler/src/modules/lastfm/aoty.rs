@@ -63,7 +63,7 @@ async fn get_aotys(
         skip,
     };
     if let Err(e) = params.get_aotys(handler, ctx, command).await {
-        eprintln!("get aotys failed: {:?}", &e);
+        eprintln!("get aotys failed: {:?}", e);
         // send error message as a followup
         command
             .create_followup(
@@ -127,7 +127,7 @@ impl GetAotys {
                 http,
                 CreateInteractionResponseFollowup::new().content(format!(
                     "No {} albums found for user {}",
-                    &year_fmt, &self.username
+                    year_fmt, self.username
                 )),
             )
             .await?;
@@ -138,16 +138,11 @@ impl GetAotys {
         // build chart image
         let image = create_aoty_chart(&aotys, self.skip.unwrap_or(false)).await?;
         // build response text content
-        let mut content = format!("**Top albums of {} for {}**", &year_fmt, &self.username);
+        let mut content = format!("**Top albums of {} for {}**", year_fmt, self.username);
         aotys
             .iter()
             .map(|ab| &ab.album)
-            .map(|ab| {
-                format!(
-                    "{} - {} ({} plays)",
-                    &ab.artist.name, &ab.name, &ab.playcount
-                )
-            })
+            .map(|ab| format!("{} - {} ({} plays)", ab.artist.name, ab.name, ab.playcount))
             .for_each(|line| {
                 content.push('\n');
                 content.push_str(&line);
@@ -162,7 +157,7 @@ impl GetAotys {
                 .content(content)
                 .add_file(CreateAttachment::bytes(
                     image,
-                    format!("{}_aoty_{}.png", &self.username, &year_fmt),
+                    format!("{}_aoty_{}.png", self.username, year_fmt),
                 )),
         )
         .await?;

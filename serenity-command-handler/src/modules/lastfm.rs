@@ -250,7 +250,7 @@ pub async fn get_release_year(
                 break Ok(Some(year));
             }
             Ok(_) => {
-                eprintln!("No release year found for {}", &url);
+                eprintln!("No release year found for {}", url);
                 set_last_checked(&db, &artist, &album).await?;
                 break Ok(None);
             }
@@ -261,7 +261,7 @@ pub async fn get_release_year(
                     break Ok(None);
                 }
                 if !retry {
-                    eprintln!("query {} {} failed: {:?}", &artist, &album, &e);
+                    eprintln!("query {} {} failed: {:?}", artist, album, e);
                     set_last_checked(&db, &artist, &album).await?;
                     // discard error, best effort
                     break Ok(None);

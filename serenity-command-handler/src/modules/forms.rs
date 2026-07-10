@@ -217,7 +217,7 @@ impl CommandFromForm {
         let form = forms.forms_client.get_form(&self.form_id).await?;
         let cmd = form.to_command(&self.command_name);
         let cmd = guild_id.create_command(&ctx.http, cmd).await?;
-        let resp = format!("Created command </{}:{}>", &cmd.name, cmd.id.get());
+        let resp = format!("Created command </{}:{}>", cmd.name, cmd.id.get());
         let form_json = serde_json::to_string(&form)?;
         let submission_type = self
             .submission_type
@@ -322,7 +322,7 @@ async fn refresh_command(
                 params![guild_id.get(), &command_name],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .context(format!("Command /{} not found", &command_name))
+            .context(format!("Command /{} not found", command_name))
         })?
     };
     // create form command
@@ -399,7 +399,7 @@ async fn list_forms(
         .map(|form| {
             format!(
                 "**· [{}]({}):** </{}:{}>",
-                &form.form.title, &form.form.responder_uri, &form.command_name, form.command_id,
+                form.form.title, form.form.responder_uri, form.command_name, form.command_id,
             )
         })
         .join("\n");
@@ -437,7 +437,7 @@ async fn override_range(
         let form = forms
             .iter_mut()
             .find(|form| form.guild_id == guild_id && form.command_name == command_name)
-            .ok_or_else(|| anyhow!("Command {} not found", &command_name))?;
+            .ok_or_else(|| anyhow!("Command {} not found", command_name))?;
         form.submissions_range = range.clone();
     }
     // update form in DB
@@ -502,9 +502,9 @@ impl SimpleForm {
         let user = &interaction.user;
         let user_handle = if let Some(discriminator) = user.discriminator {
             // legacy format
-            format!("{}#{:04}", &user.name, discriminator)
+            format!("{}#{:04}", user.name, discriminator)
         } else {
-            format!("@{}", &user.name)
+            format!("@{}", user.name)
         };
 
         // get required modules
@@ -567,7 +567,7 @@ impl SimpleForm {
                     let song_info = format!(
                         "{} - {}",
                         Spotify::artists_to_string(&song.artists),
-                        &song.name,
+                        song.name,
                     );
                     next_value = Some(song_info.clone());
                     value = song.id.unwrap().url();
@@ -601,9 +601,9 @@ impl SimpleForm {
                 .zip(&song_urls)
                 .map(|(info, url)| format!("[{info}]({url})"))
                 .join(", ");
-            format!("Submitted {songs} to **{}**", &self.title)
+            format!("Submitted {songs} to **{}**", self.title)
         } else {
-            format!("Submitted to **{}**", &self.title)
+            format!("Submitted to **{}**", self.title)
         };
         CommandResponse::private(contents)
     }
@@ -656,7 +656,7 @@ impl SimpleForm {
         if resp.is_empty() {
             resp = format!(
                 "No submissions from user {} to form {}",
-                &user.name, &self.title
+                user.name, self.title
             );
         }
         CommandResponse::private(resp)

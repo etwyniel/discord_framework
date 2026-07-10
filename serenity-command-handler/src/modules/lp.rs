@@ -119,7 +119,7 @@ impl ResolvedLp {
             if add_sep {
                 resp_content.push_str(" | ");
             }
-            _ = write!(&mut resp_content, "{}", &genres);
+            _ = write!(&mut resp_content, "{}", genres);
         }
         // encode resolved LP as a URL to hide in the LP message
         // can be retrieved later when editing
@@ -270,7 +270,8 @@ fn resolve_time(time: Option<&str>) -> Option<DateTime<Utc>> {
             (60 - cur_min) + min
         };
         lp_time = lp_time.add(Duration::minutes(to_add));
-    } else if let Some(cap) = plus_re.captures(time) {
+    } else {
+        let cap = plus_re.captures(time)?;
         let extra_mins: i64 = cap
             .get(1)
             .unwrap()
@@ -278,8 +279,6 @@ fn resolve_time(time: Option<&str>) -> Option<DateTime<Utc>> {
             .parse()
             .expect("regex match should be a valid integer");
         lp_time = lp_time.add(Duration::minutes(extra_mins));
-    } else {
-        return None;
     }
 
     // timestamp and relative time
@@ -764,7 +763,7 @@ async fn edit_lp(
     if cancel == Some(true) {
         msg.edit(
             &ctx.http,
-            EditMessage::new().content(format!("~~{}~~", &msg.content)),
+            EditMessage::new().content(format!("~~{}~~", msg.content)),
         )
         .await?;
         return CommandResponse::public("Canceled listening party");

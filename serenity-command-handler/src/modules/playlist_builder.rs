@@ -231,13 +231,13 @@ async fn do_build_playlist<'a, 'b: 'a>(
         .iter()
         .flat_map(|pick| {
             let Ok(url) = Url::parse(&pick.link) else {
-                invalid.push((pick.clone(), format!("not a url: {}", &pick.link)));
+                invalid.push((pick.clone(), format!("not a url: {}", pick.link)));
                 return None;
             };
             let Some(id) = url.path().strip_prefix("/track/") else {
                 invalid.push((
                     pick.clone(),
-                    format!("not a spotify track url: <{}>", &pick.link),
+                    format!("not a spotify track url: <{}>", pick.link),
                 ));
                 return None;
             };
@@ -399,14 +399,11 @@ async fn build_playlist_from_picks(
         .await
         .context("failed to save variables to spreadsheet")?;
     let mut resp = if last_playlist.is_none() || increment_edition {
-        format!(
-            "Created a playlist with {nvalid} tracks.\n{}",
-            &playlist_url
-        )
+        format!("Created a playlist with {nvalid} tracks.\n{}", playlist_url)
     } else {
         format!(
             "Added {nvalid} tracks to existing playlist.\n{}",
-            &playlist_url
+            playlist_url
         )
     };
     if !invalid.is_empty() {

@@ -10,8 +10,8 @@ workspace = true
 
 [dependencies]
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-rspotify = { version = "0.15", features = ["cli"] }
-rspotify-http = "0.15"
+rspotify = { version = "0.16", features = ["cli"] }
+rspotify-http = "0.16"
 rusqlite = { version = "0.40", features = ["chrono", "bundled", "fallible_uint"] }
 regex = "1.6"
 anyhow = "1.0"
