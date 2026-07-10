@@ -1,0 +1,14 @@
+[package]
+name = "pinboard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity = { workspace = true }
+anyhow = { workspace = true }
+itertools = { workspace = true }
+tokio = { workspace = true }
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+
+fallible-iterator = "0.3.0"

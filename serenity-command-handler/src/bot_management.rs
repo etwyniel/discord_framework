@@ -1,9 +1,9 @@
 use anyhow::Context as _;
-use futures::{FutureExt, future::BoxFuture};
 use serenity::all::{
     AutocompleteChoice, CommandInteraction, Context, CreateAutocompleteResponse, CreateCommand,
     CreateInteractionResponse, GuildId, GuildPagination,
 };
+use serenity::futures::{FutureExt, future::BoxFuture};
 use serenity_command::{CommandKey, CommandResponse, args, command};
 
 use crate::command_context::{get_focused_option, get_str_opt_ac};

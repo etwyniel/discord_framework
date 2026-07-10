@@ -1,0 +1,41 @@
+[package]
+name = "serenity-modules"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+polls = { path = "../modules/polls", optional = true }
+tidal = { path = "../modules/tidal", optional = true }
+bdays = { path = "../modules/bdays", optional = true }
+bandcamp = { path = "../modules/bandcamp", optional = true }
+lastfm = { path = "../modules/lastfm", optional = true }
+spotify = { path = "../modules/spotify", optional = true }
+album-lookup = { path = "../modules/album-lookup", optional = true }
+autoreact = { path = "../modules/autoreact", optional = true }
+google_apis = { path = "../modules/google_apis", optional = true }
+spotify_activity = { path = "../modules/spotify_activity", optional = true }
+forms = { path = "../modules/forms", optional = true }
+lp = { path = "../modules/lp", optional = true }
+quotes = { path = "../modules/quotes", optional = true }
+pinboard = { path = "../modules/pinboard", optional = true }
+playlist_builder = { path = "../modules/playlist_builder", optional = true }
+sql = { path = "../modules/sql", optional = true }
+
+[features]
+default = ["polls", "bdays", "autoreact", "quotes", "pinboard", "sql"]
+polls = ["dep:polls"]
+tidal = ["dep:tidal"]
+bdays = ["dep:bdays"]
+bandcamp = ["dep:bandcamp"]
+lastfm = ["dep:lastfm"]
+spotify = ["dep:spotify"]
+album-lookup = ["dep:album-lookup", "tidal", "bandcamp", "lastfm", "spotify"]
+autoreact = ["dep:autoreact"]
+google_apis = ["dep:google_apis"]
+spotify_activity = ["dep:spotify_activity"]
+forms = ["dep:forms", "spotify", "spotify_activity", "album-lookup"]
+lp = ["dep:lp", "spotify", "bandcamp", "lastfm", "tidal", "album-lookup"]
+quotes = ["dep:quotes"]
+pinboard = ["dep:pinboard"]
+playlist_builder = ["dep:playlist_builder", "forms", "spotify", "album-lookup"]
+sql = ["dep:sql"]

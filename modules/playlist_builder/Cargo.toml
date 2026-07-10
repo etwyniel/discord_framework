@@ -1,0 +1,21 @@
+[package]
+name = "playlist_builder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+album-lookup = { path = "../album-lookup" }
+spotify = { path = "../spotify" }
+google_apis = { path = "../google_apis" }
+forms = { path = "../forms" }
+
+rand = "0.10.2"

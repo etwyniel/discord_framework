@@ -1,0 +1,13 @@
+[package]
+name = "sql"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity = { workspace = true }
+anyhow = { workspace = true }
+itertools = { workspace = true }
+rusqlite = { workspace = true }
+tokio = { workspace = true }
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }

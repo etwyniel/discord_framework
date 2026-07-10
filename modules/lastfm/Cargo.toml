@@ -1,0 +1,25 @@
+[package]
+name = "lastfm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+tidal = { path = "../tidal" }
+spotify = { path = "../spotify" }
+reqwest = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+serenity = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_derive = { workspace = true }
+anyhow = { workspace = true }
+itertools = { workspace = true }
+
+tokio-stream = "0.1.18"
+image = "0.25.10"
+fallible-iterator = "0.3.0"

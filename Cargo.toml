@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = [
+members = ["modules/album-lookup", "modules/autoreact","modules/bandcamp","modules/bdays", "modules/forms", "modules/google_apis", "modules/lastfm", "modules/lp", "modules/pinboard", "modules/playlist_builder","modules/polls", "modules/quotes","modules/spotify", "modules/spotify_activity", "modules/sql", "modules/tidal",
     "serenity-command",
     "serenity-command-handler"
-]
+, "serenity-modules"]
 
 [workspace.dependencies.serenity]
 # version = "0.12"
@@ -18,3 +18,36 @@ features = [
     "cache",
     "unstable",
 ]
+
+[workspace.dependencies.anyhow]
+version = "1.0"
+
+[workspace.dependencies.tokio]
+version = "1.52"
+features = ["macros", "rt-multi-thread"]
+
+[workspace.dependencies.serde]
+version = "1.0"
+
+[workspace.dependencies.serde_json]
+version = "1.0"
+
+[workspace.dependencies.serde_derive]
+version = "1.0"
+
+[workspace.dependencies.reqwest]
+version = "0.13"
+features = ["json", "form", "query"]
+
+[workspace.dependencies.rusqlite]
+version = "0.40"
+features = ["chrono", "bundled", "fallible_uint"]
+
+[workspace.dependencies.chrono]
+version = "0.4"
+
+[workspace.dependencies.regex]
+version = "1.13"
+
+[workspace.dependencies.itertools]
+version = "0.15"

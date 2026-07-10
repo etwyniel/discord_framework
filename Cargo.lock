@@ -42,6 +42,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "album-lookup"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bandcamp",
+ "lastfm",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "spotify",
+ "tidal",
+]
+
+[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -155,6 +169,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "autoreact"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fallible-iterator",
+ "rusqlite",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "tokio",
+]
+
+[[package]]
 name = "av-scenechange"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -221,6 +248,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bandcamp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "itertools 0.15.0",
+ "reqwest 0.13.4",
+ "scraper",
+ "serenity",
+ "serenity-command-handler",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -231,6 +271,20 @@ name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
+name = "bdays"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fallible-iterator",
+ "rusqlite",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "tokio",
+]
 
 [[package]]
 name = "bit_field"
@@ -840,6 +894,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "forms"
+version = "0.1.0"
+dependencies = [
+ "album-lookup",
+ "anyhow",
+ "chrono",
+ "fallible-iterator",
+ "google_apis",
+ "itertools 0.15.0",
+ "regex",
+ "reqwest 0.13.4",
+ "rusqlite",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "spotify",
+ "spotify_activity",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1010,6 +1089,21 @@ checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
 dependencies = [
  "color_quant",
  "weezl",
+]
+
+[[package]]
+name = "google_apis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "reqwest 0.13.4",
+ "rsa",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1543,6 +1637,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "lastfm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fallible-iterator",
+ "image",
+ "itertools 0.15.0",
+ "regex",
+ "reqwest 0.13.4",
+ "rusqlite",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "spotify",
+ "tidal",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1630,6 +1748,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
+]
+
+[[package]]
+name = "lp"
+version = "0.1.0"
+dependencies = [
+ "album-lookup",
+ "anyhow",
+ "bandcamp",
+ "chrono",
+ "itertools 0.15.0",
+ "lastfm",
+ "regex",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_derive",
+ "serde_urlencoded",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "spotify",
+ "tidal",
+ "tokio",
 ]
 
 [[package]]
@@ -2103,6 +2244,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pinboard"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fallible-iterator",
+ "itertools 0.15.0",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "tokio",
+]
+
+[[package]]
 name = "pkcs1"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2130,6 +2284,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
+name = "playlist_builder"
+version = "0.1.0"
+dependencies = [
+ "album-lookup",
+ "anyhow",
+ "chrono",
+ "forms",
+ "google_apis",
+ "rand 0.10.2",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "spotify",
+ "tokio",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2140,6 +2314,18 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide",
+]
+
+[[package]]
+name = "polls"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "itertools 0.15.0",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "tokio",
 ]
 
 [[package]]
@@ -2308,6 +2494,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "quotes"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fallible-iterator",
+ "itertools 0.15.0",
+ "markov",
+ "rand 0.10.2",
+ "regex",
+ "rusqlite",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "tokio",
 ]
 
 [[package]]
@@ -2705,6 +2909,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
+ "sha2",
  "signature",
  "spki",
  "subtle",
@@ -3126,34 +3331,40 @@ name = "serenity-command-handler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64",
  "chrono",
- "fallible-iterator",
- "futures",
- "http-body-util",
- "image",
- "iso8601-duration",
  "itertools 0.15.0",
- "markov",
- "rand 0.10.2",
  "regex",
  "reqwest 0.13.4",
- "rsa",
- "rspotify",
- "rspotify-http",
  "rusqlite",
- "scraper",
  "serde",
  "serde_derive",
  "serde_json",
- "serde_urlencoded",
  "serenity",
  "serenity-command",
- "sha2",
  "tokio",
- "tokio-stream",
  "typemap_rev",
- "urlencoding",
+]
+
+[[package]]
+name = "serenity-modules"
+version = "0.1.0"
+dependencies = [
+ "album-lookup",
+ "autoreact",
+ "bandcamp",
+ "bdays",
+ "forms",
+ "google_apis",
+ "lastfm",
+ "lp",
+ "pinboard",
+ "playlist_builder",
+ "polls",
+ "quotes",
+ "spotify",
+ "spotify_activity",
+ "sql",
+ "tidal",
 ]
 
 [[package]]
@@ -3285,6 +3496,43 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "spotify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "regex",
+ "reqwest 0.13.4",
+ "rspotify",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+]
+
+[[package]]
+name = "spotify_activity"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "spotify",
+]
+
+[[package]]
+name = "sql"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "itertools 0.15.0",
+ "rusqlite",
+ "serenity",
+ "serenity-command",
+ "serenity-command-handler",
+ "tokio",
 ]
 
 [[package]]
@@ -3454,6 +3702,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tidal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "iso8601-duration",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "serenity",
+ "serenity-command-handler",
+ "tokio",
 ]
 
 [[package]]

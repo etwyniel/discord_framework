@@ -1,0 +1,12 @@
+[package]
+name = "polls"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+itertools = { workspace = true }
+serenity = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }

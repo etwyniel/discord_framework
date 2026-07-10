@@ -1,0 +1,19 @@
+[package]
+name = "quotes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+itertools = { workspace = true }
+regex = { workspace = true }
+rusqlite = { workspace = true }
+tokio = { workspace = true }
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+
+fallible-iterator = "0.3.0"
+rand = "0.10.2"
+markov = "1.1.0"

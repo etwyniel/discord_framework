@@ -1,0 +1,16 @@
+[package]
+name = "google_apis"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_derive = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+
+base64 = "0.22.1"
+rsa = { version = "0.9.10", features = ["sha2"] }

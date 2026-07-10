@@ -1,0 +1,13 @@
+[package]
+name = "autoreact"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+tokio = { workspace = true }
+serenity = { workspace = true }
+fallible-iterator = "0.3.0"

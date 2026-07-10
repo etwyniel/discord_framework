@@ -1,0 +1,14 @@
+[package]
+name = "bandcamp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
+itertools = { workspace = true }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+
+scraper = "0.27.0"

@@ -28,7 +28,6 @@ pub mod bot_management;
 pub mod command_context;
 pub mod db;
 pub mod events;
-pub mod modules;
 
 use db::Db;
 

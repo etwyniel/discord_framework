@@ -1,0 +1,16 @@
+[package]
+name = "tidal"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+serenity = { workspace = true }
+reqwest = { workspace = true }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+
+iso8601-duration = { version = "0.2.0", features = ["chrono"] }

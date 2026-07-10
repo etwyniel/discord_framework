@@ -1,0 +1,14 @@
+[package]
+name = "album-lookup"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+lastfm = { path = "../lastfm" }
+bandcamp = { path = "../bandcamp" }
+tidal = { path = "../tidal" }
+spotify = { path = "../spotify" }
+serenity = { workspace = true }
+anyhow = { workspace = true }

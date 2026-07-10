@@ -1,4 +1,4 @@
-use futures::future::BoxFuture;
+use serenity::futures::future::BoxFuture;
 use std::boxed::Box;
 use std::marker::PhantomData;
 use tokio;

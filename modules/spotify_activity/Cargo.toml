@@ -1,0 +1,11 @@
+[package]
+name = "spotify_activity"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serenity = { workspace = true }
+anyhow = { workspace = true }
+serenity-command = { path = "../../serenity-command" }
+serenity-command-handler = { path = "../../serenity-command-handler" }
+spotify = { path = "../spotify" }
