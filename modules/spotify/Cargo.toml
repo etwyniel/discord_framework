@@ -10,5 +10,6 @@ regex = { workspace = true }
 serenity = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { workspace = true }
+jiff = { workspace = true }
 
 rspotify = { version = "0.16", features = ["cli"] }

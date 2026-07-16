@@ -10,7 +10,7 @@ tidal = { path = "../tidal" }
 spotify = { path = "../spotify" }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 regex = { workspace = true }
 serenity = { workspace = true }
 tokio = { workspace = true }

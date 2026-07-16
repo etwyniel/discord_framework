@@ -6,11 +6,11 @@ edition = "2024"
 [dependencies]
 serenity = { workspace = true }
 anyhow = { workspace = true }
-chrono = { workspace = true }
 itertools = { workspace = true }
 regex = { workspace = true }
 rusqlite = { workspace = true }
 tokio = { workspace = true }
+jiff = { workspace = true }
 serenity-command = { path = "../../serenity-command" }
 serenity-command-handler = { path = "../../serenity-command-handler" }
 

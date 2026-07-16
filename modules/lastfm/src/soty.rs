@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use chrono::{Datelike, TimeZone, Utc};
 use itertools::Itertools;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serenity::all::{
     CommandInteraction, Context, CreateEmbed, CreateInteractionResponse, EditInteractionResponse,
 };
@@ -64,7 +65,7 @@ impl GetSotys {
         let year = self
             .year
             .map(|yr| yr as u64)
-            .unwrap_or_else(|| Utc::now().year() as u64);
+            .unwrap_or_else(|| Timestamp::now().to_zoned(TimeZone::UTC).year() as u64);
         let lastfm: Arc<Lastfm> = handler.module_arc()?;
         let tidal: Arc<Tidal> = handler.module_arc()?;
         let mut songs = lastfm
@@ -139,11 +140,10 @@ impl Lastfm {
                 let Some(yr) = (match cached_year {
                     Ok(year) => Some(year),
                     Err(last_checked) => {
-                        let last_checked = Utc
-                            .timestamp_opt(last_checked as i64, 0)
-                            .earliest()
-                            .unwrap_or_default();
-                        if (Utc::now() - last_checked).num_days() < TTL_DAYS {
+                        let last_checked =
+                            Timestamp::from_second(last_checked as i64).unwrap_or_default();
+                        let elapsed = Timestamp::now().duration_since(last_checked);
+                        if elapsed.as_hours() / 24 < TTL_DAYS {
                             None
                         } else {
                             get_release_year(

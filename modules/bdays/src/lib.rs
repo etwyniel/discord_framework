@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use chrono::{Datelike, Local, Timelike, Utc};
 use fallible_iterator::FallibleIterator;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use rusqlite::params;
 use serenity::all::{ChannelId, UserId};
 use serenity::builder::{CreateCommandOption, CreateEmbed, CreateEmbedAuthor};
@@ -88,7 +89,7 @@ async fn get_bdays(
     let mut bdays = get_guild_bdays(handler, guild_id).await?;
 
     // sort birthdays, upcoming first
-    let today = Utc::now().date_naive();
+    let today = Timestamp::now().to_zoned(TimeZone::UTC).date();
     let current_day = today.day() as u8;
     let current_month = today.month() as u8;
     bdays.sort_unstable_by_key(|Birthday { day, month, .. }| {
@@ -221,7 +222,7 @@ pub async fn bday_loop(db: Arc<Mutex<Db>>, http: Arc<Http>) {
     let mut interval = interval(Duration::from_secs(3600));
     loop {
         interval.tick().await;
-        let now = Local::now();
+        let now = Timestamp::now().to_zoned(TimeZone::UTC);
         if now.hour() != 10 {
             // wait for 10AM
             continue;

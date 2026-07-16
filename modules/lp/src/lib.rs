@@ -4,8 +4,9 @@ use std::fmt::Write;
 use std::ops::Add;
 
 use anyhow::{Context as _, bail};
-use chrono::{Duration, prelude::*};
 use itertools::Itertools;
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, Timestamp};
 use regex::Regex;
 use reqwest::Url;
 use serde_derive::{Deserialize, Serialize};
@@ -55,7 +56,7 @@ pub struct ResolvedLp {
     #[serde(rename = "rlink")]
     pub resolved_link: Option<String>,
     #[serde(rename = "rstart")]
-    pub resolved_start: Option<DateTime<Utc>>,
+    pub resolved_start: Option<Timestamp>,
     #[serde(rename = "rdur")]
     pub resolved_duration_s: Option<i64>,
     #[serde(flatten)]
@@ -65,23 +66,23 @@ pub struct ResolvedLp {
 /// Format an LP's start and end time for a discord message.
 fn format_time(
     time_param: Option<&str>,
-    resolved_start: Option<DateTime<Utc>>,
-    duration: Option<Duration>,
+    resolved_start: Option<Timestamp>,
+    duration: Option<SignedDuration>,
 ) -> String {
     let Some(start) = resolved_start else {
         return time_param.unwrap_or("").to_string();
     };
     let end_str = format_end(start, duration);
     if Some("now") == time_param {
-        return format!("now (<t:{}:t>{end_str})", start.timestamp());
+        return format!("now (<t:{}:t>{end_str})", start.as_second());
     }
     // timestamp and relative time
-    format!("<t:{0:}:R> (<t:{0:}:t>{end_str})", start.timestamp())
+    format!("<t:{0:}:R> (<t:{0:}:t>{end_str})", start.as_second())
 }
 
 impl ResolvedLp {
     /// Format an LP's start and end time for a discord message.
-    fn format_time(&self, duration: Option<Duration>) -> String {
+    fn format_time(&self, duration: Option<SignedDuration>) -> String {
         let time_param = self.params.time.as_deref();
         format_time(time_param, self.resolved_start, duration)
     }
@@ -161,12 +162,12 @@ pub struct Lp {
 }
 
 /// Format the end time of a Listening Party.
-fn format_end(start: DateTime<Utc>, duration: Option<Duration>) -> String {
+fn format_end(start: Timestamp, duration: Option<SignedDuration>) -> String {
     let Some(duration) = duration else {
         return String::new();
     };
     let end = start.add(duration);
-    format!(" -> <t:{}:t>", end.timestamp())
+    format!(" -> <t:{}:t>", end.as_second())
 }
 
 /// Get a list of genre tags for `info`, querying from last.fm if none are present.
@@ -195,14 +196,14 @@ fn build_message_contents(
     lp_name: Option<&str>,
     info: &Album,
     role_id: Option<u64>,
-    resolved_start: Option<DateTime<Utc>>,
+    resolved_start: Option<Timestamp>,
     desc: Option<&str>,
 ) -> anyhow::Result<String> {
     let resolved = ResolvedLp {
         resolved_start,
         resolved_title: lp_name.map(|s| s.to_string()),
         resolved_link: info.url.clone(),
-        resolved_duration_s: info.duration.map(|d| d.num_seconds()),
+        resolved_duration_s: info.duration.map(|d| d.as_secs()),
         params: lp,
     };
     resolved.build_message_contents(info, role_id, desc)
@@ -245,8 +246,8 @@ async fn find_album<'a>(
 }
 
 /// Resolve a relative time (e.g. `+5`, `XX:20`) to a UTC timestamp.
-fn resolve_time(time: Option<&str>) -> Option<DateTime<Utc>> {
-    let mut lp_time = Utc::now().add(Duration::seconds(10));
+fn resolve_time(time: Option<&str>) -> Option<Timestamp> {
+    let mut lp_time = Timestamp::now().add(SignedDuration::from_secs(10));
     let time = match time {
         Some("now") | None => {
             return Some(lp_time);
@@ -265,13 +266,13 @@ fn resolve_time(time: Option<&str>) -> Option<DateTime<Utc>> {
         if !(0..60).contains(&min) {
             return None;
         }
-        let cur_min = lp_time.minute() as i64;
+        let cur_min = lp_time.to_zoned(TimeZone::UTC).minute() as i64;
         let to_add = if cur_min <= min {
             min - cur_min
         } else {
             (60 - cur_min) + min
         };
-        lp_time = lp_time.add(Duration::minutes(to_add));
+        lp_time = lp_time.add(SignedDuration::from_mins(to_add));
     } else {
         let cap = plus_re.captures(time)?;
         let extra_mins: i64 = cap
@@ -280,7 +281,7 @@ fn resolve_time(time: Option<&str>) -> Option<DateTime<Utc>> {
             .as_str()
             .parse()
             .expect("regex match should be a valid integer");
-        lp_time = lp_time.add(Duration::minutes(extra_mins));
+        lp_time = lp_time.add(SignedDuration::from_mins(extra_mins));
     }
 
     // timestamp and relative time
@@ -289,7 +290,7 @@ fn resolve_time(time: Option<&str>) -> Option<DateTime<Utc>> {
 
 impl Lp {
     /// Resolve the supplied relative start time of this Listening Party.
-    fn resolve_time(&self) -> Option<DateTime<Utc>> {
+    fn resolve_time(&self) -> Option<Timestamp> {
         resolve_time(self.time.as_deref())
     }
 
@@ -333,7 +334,7 @@ impl Lp {
             resolved_start,
             resolved_title: lp_name.map(|s| s.to_string()),
             resolved_link: info.url.clone(),
-            resolved_duration_s: info.duration.map(|d| d.num_seconds()),
+            resolved_duration_s: info.duration.map(|d| d.as_secs()),
             params: self,
         };
         Ok((resolved, info))
@@ -343,7 +344,7 @@ impl Lp {
         self,
         handler: &Handler,
         command: impl InteractionExt,
-        resolved_start: Option<DateTime<Utc>>,
+        resolved_start: Option<Timestamp>,
         desc: Option<&str>,
     ) -> anyhow::Result<(String, Option<u64>, Album)> {
         let Lp {
@@ -692,7 +693,7 @@ impl EditLp {
             lp.params.time = Some(time.clone());
             lp.resolved_start = lp.params.resolve_time();
             new_start_formatted =
-                Some(lp.format_time(lp.resolved_duration_s.map(Duration::seconds)));
+                Some(lp.format_time(lp.resolved_duration_s.map(SignedDuration::from_secs)));
             changed = true;
         }
         if !changed {
@@ -897,7 +898,7 @@ async fn edit_listening_party(
         .required(false)
         .placeholder("+5");
     if let Some(time) = &lp.resolved_start {
-        let minute = time.minute();
+        let minute = time.to_zoned(TimeZone::UTC).minute();
         time_input = time_input.value(format!("XX:{minute:02}"));
     }
     let time_field = CreateLabel::input_text("Time", time_input)

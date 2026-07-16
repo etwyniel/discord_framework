@@ -10,9 +10,9 @@ use std::{
 };
 
 use anyhow::{Context as _, anyhow, bail};
-use chrono::{DateTime, Days, Local, NaiveTime, TimeDelta, Utc};
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
+use jiff::{SignedDuration, Timestamp, ToSpan, Zoned, tz::TimeZone};
 use rand::random;
 use regex::Regex;
 use rusqlite::{Error::SqliteFailure, ErrorCode, params};
@@ -137,7 +137,7 @@ pub struct Quote {
     pub guild_id: u64,
     pub channel_id: u64,
     pub message_id: MessageId,
-    pub ts: DateTime<Utc>,
+    pub ts: Timestamp,
     pub author_id: u64,
     pub author_name: String,
     pub contents: String,
@@ -153,7 +153,7 @@ pub fn fetch_quote(db: &Db, guild_id: u64, quote_number: u64) -> anyhow::Result<
      WHERE guild_id = ?1 AND quote_number = ?2",
             [guild_id, quote_number],
             |row| {
-                let ts = DateTime::from_timestamp(row.get(3)?, 0)
+                let ts = Timestamp::from_second(row.get(3)?)
                     .unwrap_or_default(); // yes this was quoted in 1970, what of it?
                 Ok(Quote {
                     quote_number,
@@ -527,8 +527,7 @@ impl GetQuote {
             .description(contents.clone())
             .url(message_url)
             .footer(CreateEmbedFooter::new(format!("in #{channel_name}")))
-            .timestamp(model::Timestamp::parse(&quote.ts.format("%+").to_string()).unwrap());
-
+            .timestamp(model::Timestamp::from_unix_timestamp(quote.ts.as_second())?);
         let mut has_image = false;
         if let Some(image) = quote.image {
             create = create.image(image, None);
@@ -667,7 +666,7 @@ pub async fn send_qotd(
     guild_id: u64,
     channel_id: u64,
 ) -> anyhow::Result<()> {
-    let today = Local::now().date_naive();
+    let today = Zoned::new(Timestamp::now(), TimeZone::UTC).date();
     let Some(qotd) = ({
         // access db in inner scope to avoid holding lock across awaits
         get_random_quote(db.lock().await.borrow(), guild_id, None)?
@@ -688,7 +687,7 @@ pub async fn send_qotd(
         .description(&contents)
         .url(message_url)
         .footer(CreateEmbedFooter::new(format!("in #{channel_name}")))
-        .timestamp(model::Timestamp::parse(&qotd.ts.format("%+").to_string()).unwrap());
+        .timestamp(model::Timestamp::from_unix_timestamp(qotd.ts.as_second())?);
 
     // build attachments
     let mut has_image = false;
@@ -736,16 +735,21 @@ pub async fn send_qotd(
 
 /// Returns an interval that produces a tick every day at the specified hour
 fn daily_interval_at(hour: u32) -> tokio::time::Interval {
-    let now = Local::now();
+    let now = Timestamp::now().to_zoned(TimeZone::UTC).datetime();
+
     let mut trigger_time = now
-        .with_time(NaiveTime::from_hms_opt(hour, 0, 0).unwrap())
+        .with()
+        .hour(hour as i8)
+        .minute(0)
+        .second(0)
+        .build()
         .unwrap();
-    if trigger_time - now < TimeDelta::seconds(1) {
+    if now.duration_until(trigger_time) < SignedDuration::from_secs(1) {
         // ensure first trigger is in the future
-        trigger_time = trigger_time.checked_add_days(Days::new(1)).unwrap();
+        trigger_time += 1.day();
     }
     // convert to tokio Instant
-    let t = Instant::now() + (trigger_time - now).to_std().unwrap();
+    let t = Instant::now() + now.duration_until(trigger_time).unsigned_abs();
     let mut interval = tokio::time::interval_at(t, Duration::from_hours(24));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     interval
@@ -767,7 +771,7 @@ pub async fn qotd_loop(db: Arc<Mutex<Db>>, http: Arc<Http>) {
                          (qotd_last_sent iS NULL OR qotd_last_sent < ?1)",
                 )
                 .unwrap();
-            stmt.query([Local::now().date_naive().to_string()])
+            stmt.query([Timestamp::now().to_zoned(TimeZone::UTC).date().to_string()])
                 .unwrap()
                 .map(|row| Ok((row.get(0)?, row.get(1)?)))
                 .iterator()

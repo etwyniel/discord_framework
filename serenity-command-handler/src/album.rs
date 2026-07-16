@@ -1,13 +1,13 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use chrono::Duration;
+use jiff::SignedDuration;
 use serenity::async_trait;
 
 #[derive(Debug)]
 pub struct Track {
     pub name: Option<String>,
-    pub duration: Option<chrono::Duration>,
+    pub duration: Option<SignedDuration>,
     pub uri: Option<String>,
 }
 
@@ -19,7 +19,7 @@ pub struct Album {
     pub release_date: Option<String>,
     pub url: Option<String>,
     pub is_playlist: bool,
-    pub duration: Option<Duration>,
+    pub duration: Option<SignedDuration>,
     pub cover: Option<String>,
     pub tracks: Vec<Track>,
     pub has_rich_embed: bool,
@@ -66,14 +66,14 @@ impl Album {
     pub fn format_duration(&self) -> Option<String> {
         let duration = self.duration?;
         let mut buf = String::new();
-        if duration.num_hours() > 0 {
-            _ = write!(&mut buf, "{}h", duration.num_hours());
+        if duration.as_hours() > 0 {
+            _ = write!(&mut buf, "{}h", duration.as_hours());
         }
-        let minutes = duration.num_minutes() % 60;
+        let minutes = duration.as_mins() % 60;
         if minutes > 0 {
             _ = write!(&mut buf, "{minutes:02}m");
         }
-        let seconds = duration.num_seconds();
+        let seconds = duration.as_secs();
         if seconds < 60 {
             _ = write!(&mut buf, "{seconds:02}s");
         }
@@ -99,9 +99,9 @@ impl Album {
                     return;
                 };
                 formatted.push_str(" (*");
-                let h = d.num_hours();
-                let m = d.num_minutes() % 60;
-                let s = d.num_seconds() % 60;
+                let h = d.as_hours();
+                let m = d.as_mins() % 60;
+                let s = d.as_secs() % 60;
                 _ = if h > 0 {
                     write!(&mut formatted, "{h}:{m:02}:{s:02}")
                 } else {

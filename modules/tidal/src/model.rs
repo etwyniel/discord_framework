@@ -1,5 +1,3 @@
-use iso8601_duration::Duration;
-
 use serde::Deserialize;
 
 use serenity_command_handler::album::{Album, Track};
@@ -175,9 +173,7 @@ impl AlbumAttributes {
         tracks: &[Relationship],
         included: Vec<IncludedItem>,
     ) -> Album {
-        let duration = Duration::parse(&self.duration)
-            .ok()
-            .and_then(|dur| Duration::to_chrono(&dur));
+        let duration = self.duration.parse().ok();
         let artist = artists
             .first()
             .and_then(|Relationship { id, .. }| included.iter().find(|inc| &inc.id == id))
@@ -197,9 +193,7 @@ impl AlbumAttributes {
             .iter()
             .flat_map(|track| included.iter().find(|inc| inc.id == track.id)?.track_ref())
             .map(|(id, track)| {
-                let duration = Duration::parse(&track.duration)
-                    .ok()
-                    .and_then(|dur| Duration::to_chrono(&dur));
+                let duration = track.duration.parse().ok();
                 Track {
                     name: Some(track.title.clone()),
                     duration,

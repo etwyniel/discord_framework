@@ -29,13 +29,13 @@ workspace = true
 [dependencies.rusqlite]
 workspace = true
 
-[dependencies.chrono]
-workspace = true
-
 [dependencies.regex]
 workspace = true
 
 [dependencies.itertools]
+workspace = true
+
+[dependencies.jiff]
 workspace = true
 
 [dependencies]

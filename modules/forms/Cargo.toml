@@ -12,7 +12,7 @@ google_apis = { path = "../google_apis" }
 spotify_activity = { path = "../spotify_activity" }
 serenity = { workspace = true }
 anyhow = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 regex = { workspace = true }
 rusqlite = { workspace = true }
 tokio = { workspace = true }

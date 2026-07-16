@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use base64::{Engine, prelude::BASE64_URL_SAFE};
-use chrono::{DateTime, Duration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use rsa::sha2;
 use rsa::{Pkcs1v15Sign, RsaPrivateKey, pkcs8::DecodePrivateKey};
 use serde_derive::{Deserialize, Serialize};
@@ -66,7 +66,7 @@ struct AuthTokenResponse {
 pub struct AccessToken {
     access_token: String,
     token_type: String,
-    exp: DateTime<Utc>,
+    exp: Timestamp,
 }
 
 impl FromStr for Credentials {
@@ -88,14 +88,14 @@ impl Credentials {
             typ: JwtType::Jwt,
             kid: &self.private_key_id,
         };
-        let now = Utc::now();
-        let exp = now + Duration::hours(1);
+        let now = Timestamp::now();
+        let exp = now + SignedDuration::from_hours(1);
         let claims = JwtClaims {
             iss: &self.client_email,
             scope: &scopes.join(" "),
             aud: &self.token_uri,
-            exp: exp.timestamp(),
-            iat: now.timestamp(),
+            exp: exp.as_second(),
+            iat: now.as_second(),
         };
         let header_encoded = BASE64_URL_SAFE.encode(serde_json::to_string(&header)?);
         let claims_encoded = BASE64_URL_SAFE.encode(serde_json::to_string(&claims)?);
@@ -128,7 +128,7 @@ impl Credentials {
         Ok(AccessToken {
             access_token,
             token_type,
-            exp: Utc::now() + Duration::seconds(expires_in),
+            exp: Timestamp::now() + SignedDuration::from_secs(expires_in),
         })
     }
 
@@ -143,7 +143,7 @@ impl Credentials {
 
 impl AccessToken {
     fn is_valid(&self) -> bool {
-        self.exp - Utc::now() > Duration::minutes(1)
+        Timestamp::now().duration_until(self.exp) > SignedDuration::from_mins(1)
     }
 }
 

@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context as _, anyhow, bail};
+use jiff::SignedDuration;
 use regex::Regex;
 use reqwest::redirect::Policy;
 pub use rspotify;
@@ -82,7 +83,14 @@ impl<C: BaseClient> Spotify<C> {
             .join(", ");
         let genres = album.genres.clone();
         let release_date = Some(album.release_date);
-        let duration = album.tracks.items.iter().map(|track| track.duration).sum();
+        let duration = SignedDuration::from_millis(
+            album
+                .tracks
+                .items
+                .iter()
+                .map(|track| track.duration.num_milliseconds())
+                .sum(),
+        );
         Ok(Album {
             name: Some(name),
             artist: Some(artist),
@@ -113,12 +121,13 @@ impl<C: BaseClient> Spotify<C> {
                 | PlayableItem::Episode(FullEpisode { duration, .. }) => *duration,
                 PlayableItem::Unknown(_) => Default::default(),
             })
+            .map(|d| d.num_milliseconds())
             .sum();
         Ok(Album {
             name: Some(name),
             artist,
             url: Some(playlist.id.url()),
-            duration: Some(duration),
+            duration: Some(SignedDuration::from_millis(duration)),
             is_playlist: true,
             ..Default::default()
         })

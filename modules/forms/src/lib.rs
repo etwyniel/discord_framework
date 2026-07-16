@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, anyhow, bail};
-use chrono::Duration;
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
 use regex::Regex;
@@ -556,7 +555,7 @@ impl SimpleForm {
                     }
                 } else {
                     let song = spotify.get_song_from_url(&value).await?;
-                    if song.duration > Duration::seconds(60 * 45) {
+                    if song.duration.num_seconds() > (60 * 45) {
                         bail!("This song is too long!")
                     }
                     let song_info = format!(

@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use anyhow::{Context as _, bail};
-use chrono::Timelike as _;
+use jiff::tz::TimeZone;
 use reqwest::Url;
 use serenity::all::{
     CommandInteraction, ComponentInteraction, Context, CreateActionRow, CreateButton,
@@ -535,7 +535,7 @@ async fn button_edit_lp(
         .required(false)
         .placeholder("+5");
     if let Some(time) = &lp.resolved_start {
-        let minute = time.minute();
+        let minute = time.to_zoned(TimeZone::UTC).minute();
         time_input = time_input.value(format!("XX:{minute:02}"));
     }
     let time_field = CreateLabel::input_text("Time", time_input)

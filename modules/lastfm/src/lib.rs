@@ -1,7 +1,7 @@
 use anyhow::bail;
-use chrono::{DateTime, Utc};
 use fallible_iterator::FallibleIterator;
 use image::DynamicImage;
+use jiff::Timestamp;
 use serenity::futures::FutureExt;
 use serenity::futures::future::BoxFuture;
 
@@ -166,19 +166,19 @@ impl Lastfm {
     pub async fn get_recent_tracks(
         &self,
         user: &str,
-        from: Option<DateTime<Utc>>,
-        to: Option<DateTime<Utc>>,
+        from: Option<Timestamp>,
+        to: Option<Timestamp>,
         limit: Option<u64>,
         page: Option<u64>,
     ) -> anyhow::Result<RecentTracks> {
         let mut params: Vec<(&'static str, &str)> = vec![("user", user)];
 
         // format parameters
-        let from_s = from.map(|from| from.timestamp().to_string());
+        let from_s = from.map(|from| from.as_second().to_string());
         if let Some(from) = from_s.as_deref() {
             params.push(("from", from));
         }
-        let to_s = to.map(|to| to.timestamp().to_string());
+        let to_s = to.map(|to| to.as_second().to_string());
         if let Some(to) = to_s.as_deref() {
             params.push(("to", to));
         }
@@ -333,7 +333,7 @@ async fn set_release_year(
 async fn set_last_checked(db: &Mutex<Db>, artist: &str, album: &str) -> anyhow::Result<()> {
     let db = db.lock().await;
     db.conn().execute("INSERT INTO album_cache (artist, album, last_checked) VALUES (LOWER(?1), LOWER(?2), ?3) ON CONFLICT(artist, album) DO UPDATE SET last_checked = ?3",
-    params![artist.to_lowercase(), album.to_lowercase(), Utc::now().timestamp()])?;
+    params![artist.to_lowercase(), album.to_lowercase(), Timestamp::now().as_second()])?;
     Ok(())
 }
 

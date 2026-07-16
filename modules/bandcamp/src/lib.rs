@@ -1,6 +1,6 @@
 use anyhow::{Context, anyhow};
-use chrono::TimeDelta;
 use itertools::Itertools;
+use jiff::SignedDuration;
 use reqwest::{Client, Url};
 use scraper::{ElementRef, Html, Selector};
 use serenity::async_trait;
@@ -34,7 +34,7 @@ fn extract_track_info(track: ElementRef<'_>) -> Option<Track> {
         .map(|s| s.parse::<i64>().unwrap_or_default())
         .tuples()
         .next()
-        .map(|(m, s)| TimeDelta::seconds(s) + TimeDelta::minutes(m));
+        .map(|(m, s)| SignedDuration::from_secs(m * 60 + s));
     Some(Track {
         name: Some(title.to_string()),
         duration,

@@ -1,7 +1,7 @@
 use std::{fmt::Write, ops::Not, sync::Arc};
 
 use anyhow::{Context as _, anyhow, bail};
-use chrono::Utc;
+use jiff::{Timestamp, tz::TimeZone};
 use rand::{rng, seq::SliceRandom};
 use reqwest::{Url, redirect::Policy};
 use serenity::{
@@ -196,7 +196,9 @@ async fn do_build_playlist<'a, 'b: 'a>(
                     .context("failed to get guild name")?;
                 format!("{} Playlist", guild.name)
             };
-            let date = Utc::now().date_naive().format("%Y-%m-%d");
+            let date = Timestamp::now()
+                .to_zoned(TimeZone::UTC)
+                .strftime("%Y-%m-%d");
             let resp = spotify
                 .client
                 .user_playlist_create(
@@ -345,9 +347,9 @@ async fn build_playlist_from_picks(
         let req = ValueRange {
             values: Some(vec![vec![
                 variables.edition.into(),
-                Utc::now()
-                    .date_naive()
-                    .format("%Y-%m-%d")
+                Timestamp::now()
+                    .to_zoned(TimeZone::UTC)
+                    .strftime("%Y-%m-%d")
                     .to_string()
                     .into(),
                 playlist_url.clone().into(),

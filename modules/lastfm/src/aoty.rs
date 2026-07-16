@@ -1,10 +1,11 @@
 use std::{collections::HashMap, io::Cursor, ops::RangeInclusive, sync::Arc};
 
 use anyhow::Context as _;
-use chrono::{Datelike, TimeZone, Utc};
 use image::{
     DynamicImage, GenericImage, ImageFormat, ImageReader, RgbaImage, imageops::FilterType,
 };
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serenity::all::{
     CommandInteraction, Context, CreateAttachment, CreateInteractionResponseFollowup,
 };
@@ -100,7 +101,7 @@ impl GetAotys {
                 let y = self
                     .year
                     .map(|yr| yr as u64)
-                    .unwrap_or_else(|| Utc::now().year() as u64);
+                    .unwrap_or_else(|| Timestamp::now().to_zoned(TimeZone::UTC).year() as u64);
                 y..=y
             });
         let start = year_range.start();
@@ -286,7 +287,8 @@ impl Lastfm {
     ) -> anyhow::Result<Vec<AlbumWithImage>> {
         let mut aotys = Vec::<TopAlbum>::new();
         let mut img_futures = Vec::new();
-        let current_year = *year_range.start() == Utc::now().year() as u64;
+        let current_year =
+            *year_range.start() == Timestamp::now().to_zoned(TimeZone::UTC).year() as u64;
         let mut stream = Arc::clone(&self)
             .top_albums_stream(user.to_string(), current_year)
             .try_take_while(|ta| {
@@ -332,11 +334,10 @@ impl Lastfm {
                                 ab.url,
                             );
                             async move {
-                                let last_checked = Utc
-                                    .timestamp_opt(last_checked as i64, 0)
-                                    .earliest()
-                                    .unwrap_or_default();
-                                if (Utc::now() - last_checked).num_days() < TTL_DAYS {
+                                let last_checked =
+                                    Timestamp::from_second(last_checked as i64).unwrap_or_default();
+                                let elapsed = Timestamp::now().duration_since(last_checked);
+                                if elapsed.as_hours() / 24 < TTL_DAYS {
                                     return Ok((i, None));
                                 }
                                 year_fut.await.map(|yr| (i, yr))

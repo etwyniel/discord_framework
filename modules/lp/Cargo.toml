@@ -6,13 +6,13 @@ edition = "2024"
 [dependencies]
 serenity = { workspace = true }
 anyhow = { workspace = true }
-chrono = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 tokio = { workspace = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 serenity-command = { path = "../../serenity-command" }
 serenity-command-handler = { path = "../../serenity-command-handler" }
 bandcamp = { path = "../bandcamp" }

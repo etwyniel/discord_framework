@@ -1,7 +1,7 @@
 use std::{collections::HashMap, env};
 
 use anyhow::{Context, anyhow, bail};
-use chrono::{DateTime, Local};
+use jiff::{SignedDuration, Timestamp};
 use reqwest::{self, Client, Method, Url};
 use serde::de::DeserializeOwned;
 use serenity::async_trait;
@@ -19,7 +19,7 @@ pub use model::*;
 /// Tidal authentication token
 struct Token {
     value: String,
-    expiration: DateTime<Local>,
+    expiration: Timestamp,
 }
 
 /// Tidal API client
@@ -60,7 +60,7 @@ impl Tidal {
     /// the stored token is expired or absent.
     pub async fn get_token(&self) -> anyhow::Result<String> {
         if let Some(Token { value, expiration }) = self.token.read().await.as_ref()
-            && *expiration - Local::now() > chrono::Duration::hours(1)
+            && Timestamp::now().duration_until(*expiration) > SignedDuration::from_hours(1)
         {
             // token exists and is still valid for over an hour
             return Ok(value.to_owned());
@@ -79,7 +79,7 @@ impl Tidal {
 
         let token = Token {
             value: resp.access_token,
-            expiration: Local::now() + chrono::Duration::seconds(resp.expires_in as i64),
+            expiration: Timestamp::now() + SignedDuration::from_secs(resp.expires_in as i64),
         };
         Ok(self.token.write().await.insert(token).value.to_owned())
     }
