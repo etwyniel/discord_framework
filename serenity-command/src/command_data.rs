@@ -38,7 +38,7 @@ impl FromOptionValue for String {
         let ComponentInteractionDataKind::StringSelect { values } = value else {
             return None;
         };
-        values.first().map(|s| s.to_string())
+        values.first().cloned()
     }
 
     fn from_str(value: &str) -> Option<Self> {
@@ -108,7 +108,7 @@ impl FromOptionValue for UserId {
     }
 
     fn from_str(value: &str) -> Option<Self> {
-        Some(UserId::new(value.parse::<u64>().ok()?))
+        Some(Self::new(value.parse::<u64>().ok()?))
     }
 
     fn kind() -> CommandOptionType {
@@ -132,7 +132,7 @@ impl FromOptionValue for RoleId {
     }
 
     fn from_str(value: &str) -> Option<Self> {
-        Some(RoleId::new(value.parse::<u64>().ok()?))
+        Some(Self::new(value.parse::<u64>().ok()?))
     }
 
     fn kind() -> CommandOptionType {
@@ -229,7 +229,7 @@ impl CommandDataExt for ModalInteractionData {
                     }
                     return T::from_strings(select.values.as_slice());
                 }
-                _ => continue,
+                _ => {}
             }
         }
         T::default()
@@ -244,7 +244,7 @@ pub struct Arg<T> {
     pub name: &'static str,
     pub description: &'static str,
     pub autocomplete: bool,
-    arg_t: PhantomData<T>,
+    ty: PhantomData<T>,
 }
 
 impl<T: FromOptionValue> Arg<T> {
@@ -267,11 +267,11 @@ impl<T: FromOptionValue> Arg<T> {
 
 impl<T> Arg<T> {
     pub const fn new(name: &'static str, description: &'static str, autocomplete: bool) -> Self {
-        Arg {
+        Self {
             name,
             description,
             autocomplete,
-            arg_t: PhantomData,
+            ty: PhantomData,
         }
     }
 }

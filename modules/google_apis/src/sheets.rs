@@ -27,7 +27,7 @@ pub struct ValueRange {
 impl Sheets {
     pub fn new(credentials: &Arc<Credentials>) -> Self {
         let authenticator = credentials.authenticator(&[SCOPE_SPREADSHEETS]);
-        Sheets {
+        Self {
             authenticator,
             client: reqwest::Client::new(),
         }

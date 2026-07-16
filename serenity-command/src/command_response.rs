@@ -10,31 +10,31 @@ pub enum ResponseType {
 
 impl From<String> for ResponseType {
     fn from(value: String) -> Self {
-        ResponseType::Text(value)
+        Self::Text(value)
     }
 }
 
 impl<'a> From<&'a str> for ResponseType {
     fn from(value: &'a str) -> Self {
-        ResponseType::Text(value.to_string())
+        Self::Text(value.to_string())
     }
 }
 
 impl From<CreateEmbed<'static>> for ResponseType {
     fn from(value: CreateEmbed<'static>) -> Self {
-        ResponseType::Embed(Box::new(value))
+        Self::Embed(Box::new(value))
     }
 }
 
 impl From<Box<CreateEmbed<'static>>> for ResponseType {
     fn from(value: Box<CreateEmbed<'static>>) -> Self {
-        ResponseType::Embed(value)
+        Self::Embed(value)
     }
 }
 
 impl<T: Into<String>> From<(T, Vec<CreateEmbed<'static>>)> for ResponseType {
     fn from((text, embeds): (T, Vec<CreateEmbed<'static>>)) -> Self {
-        ResponseType::Mixed(text.into(), embeds)
+        Self::Mixed(text.into(), embeds)
     }
 }
 
@@ -55,10 +55,10 @@ impl ResponseType {
         Option<Vec<(String, String)>>,
     ) {
         match self {
-            ResponseType::Text(s) => (Some(s), None, None),
-            ResponseType::Embed(e) => (None, Some(vec![*e]), None),
-            ResponseType::Mixed(s, e) => (Some(s), Some(e), None),
-            ResponseType::WithAttachments(s, e, a) => (Some(s), Some(e), Some(a)),
+            Self::Text(s) => (Some(s), None, None),
+            Self::Embed(e) => (None, Some(vec![*e]), None),
+            Self::Mixed(s, e) => (Some(s), Some(e), None),
+            Self::WithAttachments(s, e, a) => (Some(s), Some(e), Some(a)),
         }
     }
 }
@@ -71,12 +71,12 @@ pub struct ContentAndFlags(
 );
 
 impl CommandResponse {
-    pub const ACK: anyhow::Result<Self> = Ok(CommandResponse::Ack);
+    pub const ACK: anyhow::Result<Self> = Ok(Self::Ack);
 
     pub fn to_contents_and_flags(self) -> Option<ContentAndFlags> {
         Some(match self {
-            CommandResponse::None | CommandResponse::Ack => return None,
-            CommandResponse::Public(resp) => {
+            Self::None | Self::Ack => return None,
+            Self::Public(resp) => {
                 let (text, embeds, attachments) = resp.to_content();
                 ContentAndFlags(
                     text.unwrap_or_default(),
@@ -85,7 +85,7 @@ impl CommandResponse {
                     MessageFlags::empty(),
                 )
             }
-            CommandResponse::Private(resp) => {
+            Self::Private(resp) => {
                 let (text, embeds, attachments) = resp.to_content();
                 ContentAndFlags(
                     text.unwrap_or_default(),
@@ -108,6 +108,6 @@ impl CommandResponse {
 
 impl<T: Into<ResponseType>> From<T> for CommandResponse {
     fn from(value: T) -> Self {
-        CommandResponse::Public(value.into())
+        Self::Public(value.into())
     }
 }

@@ -149,7 +149,7 @@ pub struct SimpleQuestion {
     pub ty: QuestionType,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub enum QuestionType {
     Text,
     Choice(Vec<String>),
@@ -205,15 +205,11 @@ impl TryFrom<Form> for SimpleForm {
         let questions = value
             .items
             .iter()
-            .flat_map(|item| item.try_into().transpose())
+            .filter_map(|item| item.try_into().transpose())
             .collect::<anyhow::Result<Vec<_>>>()?;
         let responder_uri = value.uri.clone();
-        let sheet_id = value
-            .linked_sheet_id
-            .as_ref()
-            // .ok_or_else(|| anyhow!("No linked spreadsheet"))?
-            .cloned();
-        Ok(SimpleForm {
+        let sheet_id = value.linked_sheet_id.clone();
+        Ok(Self {
             id,
             title,
             questions,

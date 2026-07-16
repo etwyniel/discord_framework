@@ -40,7 +40,7 @@ impl LpCreationModalHandler {
             .as_deref()
             .cloned()
             .context("expected member")?;
-        Ok(LpCreationModalHandler {
+        Ok(Self {
             handler: handler.me.upgrade().unwrap(),
             http: Arc::clone(handler.http.get().unwrap()),
             receiver,
@@ -64,7 +64,7 @@ impl LpCreationModalHandler {
                     description,
                     time,
                 }) => break (modal_id, modal_token, album, link, description, time),
-                _ => continue, // should be unreachable but handle to avoid breakage
+                _ => {} // should be unreachable but handle to avoid breakage
             }
         };
 
@@ -81,26 +81,11 @@ impl LpCreationModalHandler {
         };
 
         // build initial message contents
-        let contents = match resolved.build_message_contents(
+        let contents = resolved.build_message_contents(
             &info,
             resolved.params.role.map(RoleId::get),
             description.as_deref(),
-        ) {
-            Ok(contents) => contents,
-            Err(e) => {
-                let err_msg = format!("Failed to create listening party: {e:?}");
-                eprintln!("{err_msg}");
-                // attempt to return error to user, ignore failure
-                _ = CreateInteractionResponse::Message(
-                    CreateInteractionResponseMessage::new()
-                        .content(err_msg)
-                        .ephemeral(true),
-                )
-                .execute(&self.http, modal_id, &modal_token)
-                .await;
-                return;
-            }
-        };
+        );
 
         // build components to add to the LP creation message
         let message_components =
@@ -167,11 +152,8 @@ fn lp_creation_modal(command_id: InteractionId) -> CreateInteractionResponse<'st
     ];
 
     CreateInteractionResponse::Modal(
-        CreateModal::new(
-            format!("create_lp.{}", command_id),
-            "Start a Listening Party",
-        )
-        .components(fields),
+        CreateModal::new(format!("create_lp.{command_id}"), "Start a Listening Party")
+            .components(fields),
     )
 }
 
@@ -265,7 +247,7 @@ struct LpCreator {
 }
 
 impl LpCreator {
-    fn build_contents(&mut self) -> anyhow::Result<String> {
+    fn build_contents(&self) -> String {
         self.lp.build_message_contents(
             &self.info,
             self.lp.params.role.map(RoleId::get),
@@ -273,8 +255,8 @@ impl LpCreator {
         )
     }
 
-    async fn edit_preview(&mut self, http: &Http) {
-        let contents = self.build_contents().unwrap();
+    async fn edit_preview(&self, http: &Http) {
+        let contents = self.build_contents();
         let resp = EditInteractionResponse::new()
             .content(format!("# PREVIEW\n{contents}"))
             .execute(http, &self.modal_token)
@@ -284,8 +266,8 @@ impl LpCreator {
         }
     }
 
-    async fn send(&mut self, handler: &Handler, http: &Http) -> bool {
-        let contents = self.build_contents().unwrap();
+    async fn send(&self, handler: &Handler, http: &Http) -> bool {
+        let contents = self.build_contents();
         let interaction = InteractionInfo {
             id: self.id,
             token: &self.token,
@@ -321,11 +303,10 @@ impl LpCreator {
         http: &Http,
         mut receiver: Receiver<LpCreationEvent>,
     ) {
-        use super::LpCreationEvent::*;
         while let Some(evt) = receiver.recv().await {
             match evt {
-                Initial { .. } => continue, // should not happen, ignore and carry on
-                Send => {
+                LpCreationEvent::Initial { .. } => {} // should not happen, ignore and carry on
+                LpCreationEvent::Send => {
                     // done editing, send final version
                     if self.send(handler, http).await {
                         // send succeeded, done
@@ -333,11 +314,11 @@ impl LpCreator {
                     }
                     // send failed, stay in loop to allow retrying
                 }
-                ChangeRole(new_role) => {
+                LpCreationEvent::ChangeRole(new_role) => {
                     self.lp.params.role = Some(new_role);
                     self.edit_preview(http).await;
                 }
-                Edit {
+                LpCreationEvent::Edit {
                     album: title,
                     link,
                     description,

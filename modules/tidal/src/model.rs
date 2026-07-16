@@ -168,10 +168,10 @@ pub struct ErrorResponse {
 impl AlbumAttributes {
     pub fn into_album(
         self,
-        id: String,
+        id: &str,
         artists: &[Relationship],
         tracks: &[Relationship],
-        included: Vec<IncludedItem>,
+        included: &[IncludedItem],
     ) -> Album {
         let duration = self.duration.parse().ok();
         let artist = artists
@@ -191,7 +191,7 @@ impl AlbumAttributes {
 
         let tracks = tracks
             .iter()
-            .flat_map(|track| included.iter().find(|inc| inc.id == track.id)?.track_ref())
+            .filter_map(|track| included.iter().find(|inc| inc.id == track.id)?.track_ref())
             .map(|(id, track)| {
                 let duration = track.duration.parse().ok();
                 Track {
@@ -206,7 +206,7 @@ impl AlbumAttributes {
             name: Some(self.title),
             release_date: self.release_date,
             duration,
-            url: Some(album_share_url(&id)),
+            url: Some(album_share_url(id)),
             artist,
             tracks,
 
@@ -228,7 +228,7 @@ fn track_ordering(item: &Relationship) -> Option<(i64, i64)> {
 
 impl Response<AlbumAttributes> {
     pub fn into_album(self) -> Album {
-        let Response { data, included } = self;
+        let Self { data, included } = self;
         let ResponseData {
             id,
             attributes,
@@ -239,6 +239,6 @@ impl Response<AlbumAttributes> {
         // sort tracks by track number
         let mut tracks = items.map(|items| items.data).unwrap_or_default();
         tracks.sort_by_key(|item| track_ordering(item).unwrap_or_default());
-        attributes.into_album(id, &artists.data, &tracks, included)
+        attributes.into_album(&id, &artists.data, &tracks, &included)
     }
 }

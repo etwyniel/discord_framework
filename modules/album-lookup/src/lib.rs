@@ -160,11 +160,11 @@ impl AlbumLookup {
     ) -> anyhow::Result<Vec<(String, String)>> {
         let p = self.get_provider(provider);
         let mut choices = p.query_albums(query).await?;
-        choices.iter_mut().for_each(|(name, _)| {
+        for (name, _) in &mut choices {
             if name.len() >= 100 {
                 *name = name.chars().take(100).collect();
             }
-        });
+        }
         Ok(choices)
     }
 
@@ -194,7 +194,7 @@ impl RegisterableModule for AlbumLookup {
     }
 
     async fn init(m: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(AlbumLookup {
+        Ok(Self {
             providers: vec![
                 m.module_arc::<Tidal>()?,
                 m.module_arc::<Bandcamp>()?,

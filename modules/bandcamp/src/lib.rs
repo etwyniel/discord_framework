@@ -64,7 +64,7 @@ pub struct Bandcamp {
 
 impl Bandcamp {
     pub fn new() -> Self {
-        Bandcamp {
+        Self {
             client: Client::new(),
         }
     }
@@ -128,7 +128,7 @@ impl AlbumProvider for Bandcamp {
         let track_selector = Selector::parse(".title-col > .title").unwrap();
         let tracks = html
             .select(&track_selector)
-            .flat_map(extract_track_info)
+            .filter_map(extract_track_info)
             .collect::<Vec<_>>();
 
         // extract album cover
@@ -137,7 +137,7 @@ impl AlbumProvider for Bandcamp {
             .select(&cover_selector)
             .next()
             .and_then(|a| a.attr("href"))
-            .map(|s| s.to_string());
+            .map(str::to_string);
 
         Ok(Album {
             name: Some(title),
@@ -182,7 +182,7 @@ impl AlbumProvider for Bandcamp {
         Ok(search_results
             .select(&url_selector)
             .zip(search_results.select(&artist_selector))
-            .flat_map(format_search_result)
+            .filter_map(format_search_result)
             .take(10)
             .collect())
     }
@@ -199,6 +199,6 @@ impl Module for Bandcamp {}
 
 impl RegisterableModule for Bandcamp {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Bandcamp::new())
+        Ok(Self::new())
     }
 }

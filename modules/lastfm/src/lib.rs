@@ -90,7 +90,7 @@ impl Lastfm {
     pub fn new() -> Self {
         let api_key = env::var("LFM_API_KEY").unwrap();
         let client = Client::new();
-        Lastfm { client, api_key }
+        Self { client, api_key }
     }
 
     /// Send a last.fm API request
@@ -124,7 +124,7 @@ impl Lastfm {
             let resp = client.client.get(url).send().await?;
             if resp.status() != StatusCode::OK {
                 let text = resp.text().await?;
-                bail!("Error getting calling API method {method}: {}", text);
+                bail!("Error getting calling API method {method}: {text}");
             }
             Ok(resp)
         }
@@ -253,7 +253,7 @@ pub async fn get_release_year(
                 break Ok(Some(year));
             }
             Ok(_) => {
-                eprintln!("No release year found for {}", url);
+                eprintln!("No release year found for {url}");
                 set_last_checked(&db, &artist, &album).await?;
                 break Ok(None);
             }
@@ -264,7 +264,7 @@ pub async fn get_release_year(
                     break Ok(None);
                 }
                 if !retry {
-                    eprintln!("query {} {} failed: {:?}", artist, album, e);
+                    eprintln!("query {artist} {album} failed: {e:?}");
                     set_last_checked(&db, &artist, &album).await?;
                     // discard error, best effort
                     break Ok(None);
@@ -390,9 +390,10 @@ async fn fix_release_year(
         "UPDATE album_cache SET year = ?3, last_checked = 0 WHERE artist = ?1 AND album = ?2",
         params![artist.to_lowercase(), album.to_lowercase(), year],
     )?;
-    let mut resp = format!("Updated release year of {artist} - {album} to {year}",);
+    drop(db);
+    let mut resp = format!("Updated release year of {artist} - {album} to {year}");
     if let Some(prev) = current_value {
-        resp.push_str(&format!(" (was {prev})"));
+        let _ = write!(&mut resp, " (was {prev})");
     }
     CommandResponse::public(resp)
 }
@@ -444,7 +445,7 @@ fn complete_album<'a>(
         let complete = values
             .iter()
             .fold(CreateAutocompleteResponse::new(), |complete, val| {
-                complete.add_choice(val.to_string())
+                complete.add_choice(val.clone())
             });
         ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(complete))
             .await?;
@@ -478,7 +479,7 @@ impl Module for Lastfm {
 
 impl RegisterableModule for Lastfm {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Lastfm::new())
+        Ok(Self::new())
     }
 
     async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {

@@ -4,6 +4,7 @@ use anyhow::{Context as _, anyhow};
 use fallible_iterator::FallibleIterator;
 use rusqlite::{Connection, params};
 use serenity::futures::{FutureExt, future::BoxFuture};
+use serenity::small_fixed_array::FixedString;
 use serenity::{
     all::AutocompleteChoice,
     async_trait,
@@ -25,7 +26,7 @@ use serenity_command_handler::{
 };
 
 pub struct AutoReact {
-    trigger: String,
+    trigger: FixedString,
     emote: ReactionType,
 }
 
@@ -34,24 +35,18 @@ fn parse_emote(s: &str) -> anyhow::Result<ReactionType> {
 }
 
 impl AutoReact {
-    fn new(trigger: &str, emote: &str) -> anyhow::Result<AutoReact> {
+    fn new(trigger: &str, emote: &str) -> anyhow::Result<Self> {
         let emote = parse_emote(emote)?;
-        Ok(AutoReact {
-            trigger: trigger.to_string(),
+        Ok(Self {
+            trigger: FixedString::from_str(trigger)?,
             emote,
         })
     }
 }
 
-impl From<(&str, &str)> for AutoReact {
-    fn from((trigger, emote): (&str, &str)) -> Self {
-        AutoReact::new(trigger, emote).unwrap()
-    }
-}
-
 pub type ReactsCache = HashMap<u64, Vec<AutoReact>>;
 
-pub async fn new(db: &Connection) -> anyhow::Result<ReactsCache> {
+pub fn new(db: &Connection) -> anyhow::Result<ReactsCache> {
     let cache = {
         db.prepare("SELECT guild_id, trigger, emote FROM autoreact")?
             .query([])?
@@ -148,7 +143,7 @@ async fn remove_autoreact(
     let emote = parse_emote(&emote)?;
     if let Some(reacts) = handler.reacts_cache()?.write().await.get_mut(&guild_id) {
         reacts.retain_mut(|ar| ar.trigger != trigger && ar.emote != emote);
-    };
+    }
     CommandResponse::private("Autoreact removed")
 }
 
@@ -194,22 +189,20 @@ impl ModAutoreacts {
         lower.push_str(
             &msg.embeds
                 .iter()
-                .flat_map(|e| e.description.as_deref())
+                .filter_map(|e| e.description.as_deref())
                 .collect::<String>()
                 .to_lowercase(),
         );
         let mut indices = Vec::new();
         let cache = self.cache.read().await;
-        let guild_id = match msg.guild_id {
-            Some(id) => id.get(),
-            None => return Ok(()),
+        let Some(guild_id) = msg.guild_id else {
+            return Ok(());
         };
-        let reacts = match cache.get(&guild_id) {
-            Some(reacts) => reacts,
-            None => return Ok(()),
+        let Some(reacts) = cache.get(&guild_id.get()) else {
+            return Ok(());
         };
         for (i, react) in reacts.iter().enumerate() {
-            if let Some(ndx) = lower.find(&react.trigger) {
+            if let Some(ndx) = lower.find(react.trigger.as_str()) {
                 indices.push((ndx, i));
             }
         }
@@ -262,9 +255,8 @@ impl ModAutoreacts {
             let trigger = get_str_opt_ac(options, "trigger").unwrap_or("");
             let emote = get_str_opt_ac(options, "emote").unwrap_or("");
             let res = Self::autocomplete_autoreact(handler, guild_id, trigger, emote).await?;
-            let focused = match get_focused_option(options) {
-                Some(f) => f,
-                None => return Ok(true),
+            let Some(focused) = get_focused_option(options) else {
+                return Ok(true);
             };
             let it = res
                 .into_iter()
@@ -330,12 +322,12 @@ impl Module for ModAutoreacts {
     fn register_commands(&self, store: &mut dyn Storer) {
         store.register(ADD_AUTOREACT);
         store.register(REMOVE_AUTOREACT);
-        store.register(ModAutoreacts::complete_reacts as CompletionHandler);
+        store.register(Self::complete_reacts as CompletionHandler);
     }
 }
 
 impl RegisterableModule for ModAutoreacts {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Default::default())
+        Ok(ModAutoreacts::default())
     }
 }

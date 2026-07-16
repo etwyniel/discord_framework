@@ -80,6 +80,14 @@ async fn autocomplete_link(
     }
 }
 
+// list of commands that take a form command as an argument
+const FORM_COMMANDS: [&str; 4] = [
+    DELETE_FORM_COMMAND.name,
+    REFRESH_FORM_COMMAND.name,
+    GET_SUBMISSIONS.name,
+    OVERRIDE_SUBMISSION_RANGE.name,
+];
+
 /// Process an autocomplete request for a form command.
 pub async fn process_autocomplete(
     handler: &Handler,
@@ -91,17 +99,9 @@ pub async fn process_autocomplete(
     let options = &ac.data.options;
     let forms: &Forms = handler.module()?;
     let cmd_name = ac.data.name.as_str();
-    let focused = match get_focused_option(options) {
-        Some(opt) => opt,
-        None => return Ok(true),
+    let Some(focused) = get_focused_option(options) else {
+        return Ok(true);
     };
-    // list of commands that take a form command as an argument
-    const FORM_COMMANDS: [&str; 4] = [
-        DELETE_FORM_COMMAND.name,
-        REFRESH_FORM_COMMAND.name,
-        GET_SUBMISSIONS.name,
-        OVERRIDE_SUBMISSION_RANGE.name,
-    ];
     if FORM_COMMANDS.contains(&cmd_name) {
         // this is a command that operates on forms,
         // complete with registered commands in this guild
@@ -113,7 +113,7 @@ pub async fn process_autocomplete(
             .iter()
             .map(|form| (form.guild_id, &form.command_name))
             .filter(|(guild, name)| *guild == guild_id && name.contains(opt))
-            .map(|(_, name)| (name.to_string(), name.to_string()))
+            .map(|(_, name)| (name.clone(), name.clone()))
             .collect();
     } else {
         // load list of forms to check if this is a form command

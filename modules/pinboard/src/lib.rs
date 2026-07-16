@@ -22,7 +22,7 @@ use serenity_command_handler::{RegisterableModule, prelude::*};
 
 const MAX_EMBEDS: usize = 10;
 
-/// Copy a message embed to a CreateEmbed
+/// Copy a message embed to a `CreateEmbed`
 pub fn copy_embed(em: &Embed) -> CreateEmbed<'_> {
     let mut out = CreateEmbed::new();
     if let Some(title) = &em.title {
@@ -48,7 +48,7 @@ pub fn copy_embed(em: &Embed) -> CreateEmbed<'_> {
         out = out.description(desc);
     }
     for fld in &em.fields {
-        out = out.field(&fld.name, &fld.value, fld.inline)
+        out = out.field(&fld.name, &fld.value, fld.inline);
     }
     if let Some(footer) = &em.footer {
         let mut f = CreateEmbedFooter::new(&footer.text);
@@ -150,7 +150,7 @@ async fn load_allowed_channels(
 /// Helper to get a user's avatar, favoring the server avatar if present
 fn user_avatar(user: &User, member: Option<&Member>) -> Option<String> {
     member
-        .and_then(|member| member.avatar_url().clone())
+        .and_then(Member::avatar_url)
         .filter(|av| av.starts_with("http"))
         .or_else(|| user.avatar_url())
         .filter(|av| av.starts_with("http"))
@@ -176,8 +176,7 @@ async fn prepare_message<'a>(
     };
     let name = member
         .as_ref()
-        .map(|m| m.display_name())
-        .unwrap_or(&author.name);
+        .map_or(author.name.as_str(), |m| m.display_name());
     let avatar = user_avatar(author, member.as_ref());
     // filter attachments to find images
     let images = msg
@@ -277,7 +276,7 @@ impl Pinboard {
                         em = em.image(img, None);
                     }
                     em
-                })
+                });
             }
         }
         // put first image with the embed for message text
@@ -305,7 +304,7 @@ impl Pinboard {
                     em = em.image(url, None);
                 }
                 em
-            })
+            });
         }
         // create embeds for remaining images
         embeds.extend(images.into_iter().skip(1).map(|img| {
@@ -445,6 +444,6 @@ impl Module for Pinboard {
 
 impl RegisterableModule for Pinboard {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Pinboard)
+        Ok(Self)
     }
 }

@@ -334,7 +334,7 @@ async fn poll_task(
     let mut last_event = Instant::now();
 
     loop {
-        if last_event.elapsed() >= Duration::from_secs(900) {
+        if last_event.elapsed() >= Duration::from_mins(15) {
             // too long since last event, stop this task
             return;
         }
@@ -355,7 +355,7 @@ async fn poll_task(
                         UserStatus::NotReady => &mut users_no,
                     };
                     if !vec.contains(&user) {
-                        vec.push(user)
+                        vec.push(user);
                     }
                     changed = true;
                 }
@@ -391,7 +391,7 @@ async fn poll_task(
                         eprintln!("error executing crabdown: {e}");
                     }
                 }
-                _ => {}
+                PollEvent::Start => {}
             }
         }
         if !changed {
@@ -483,13 +483,13 @@ impl ModPoll {
         count: S4,
         go: S5,
     ) -> Self {
-        ModPoll {
+        Self {
             yes: yes.into().unwrap_or(YES).to_string(),
             no: no.into().unwrap_or(NO).to_string(),
             start: start.into().unwrap_or(START).to_string(),
             count: count.into().unwrap_or(COUNT).to_string(),
             go: go.into().unwrap_or(GO).to_string(),
-            ready_polls: Default::default(),
+            ready_polls: Arc::default(),
         }
     }
 
@@ -500,7 +500,7 @@ impl ModPoll {
         react: &Reaction,
     ) -> anyhow::Result<()> {
         // we only care about YES reacts being removed
-        let module: &ModPoll = handler.module()?;
+        let module: &Self = handler.module()?;
         let status = match react.emoji.to_string() {
             x if x == module.yes => UserStatus::Ready,
             x if x == module.no => UserStatus::NotReady,
@@ -534,23 +534,26 @@ impl ModPoll {
             .user_id
             .ok_or_else(|| anyhow!("invalid react: missing userId"))?;
 
-        let module: &ModPoll = handler.module()?;
+        let module: &Self = handler.module()?;
         let polls = module.ready_polls.read().await;
         let Some((_, handle)) = polls.iter().find(|(id, _)| *id == react.message_id) else {
             return Ok(());
         };
+        let sender = handle.sender.clone();
+        let poll_user_id = handle.user_id;
+        drop(polls);
         let react_string = react.emoji.to_string();
         if handler.self_id.get() == Some(&user_id) {
             // not a react we care about
             return Ok(());
-        };
+        }
         let event = if react_string == module.yes {
             // user added a YES react (and is not the bot)
             // send AddReady event
             PollEvent::AddStatus(user_id, UserStatus::Ready)
         } else if react_string == module.no {
             PollEvent::AddStatus(user_id, UserStatus::NotReady)
-        } else if handle.user_id == user_id && react_string == module.start {
+        } else if poll_user_id == user_id && react_string == module.start {
             // poll author clicked the START react
             // send Start event
             PollEvent::Start
@@ -559,7 +562,7 @@ impl ModPoll {
         };
 
         // send event to the poll's handler task
-        _ = handle.sender.send(event).await;
+        _ = sender.send(event).await;
 
         Ok(())
     }
@@ -581,6 +584,6 @@ impl Module for ModPoll {
 
 impl RegisterableModule for ModPoll {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Default::default())
+        Ok(Self::default())
     }
 }

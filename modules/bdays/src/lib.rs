@@ -90,8 +90,8 @@ async fn get_bdays(
 
     // sort birthdays, upcoming first
     let today = Timestamp::now().to_zoned(TimeZone::UTC).date();
-    let current_day = today.day() as u8;
-    let current_month = today.month() as u8;
+    let current_day = today.day().cast_unsigned();
+    let current_month = today.month().cast_unsigned();
     bdays.sort_unstable_by_key(|Birthday { day, month, .. }| {
         let mut month = *month;
         if month < current_month || (month == current_month && *day < current_day) {
@@ -108,11 +108,13 @@ async fn get_bdays(
         .map(|b| format!("`{:02}/{:02}` • <@{}>", b.day, b.month, b.user_id))
         .collect::<Vec<_>>()
         .join("\n");
-    let header = if let Some(server) = command.guild_id.and_then(|g| g.name(&ctx.cache)) {
-        format!("Birthdays in {server}")
-    } else {
-        "Birthdays".to_string()
-    };
+    let header = command
+        .guild_id
+        .and_then(|g| g.name(&ctx.cache))
+        .map_or_else(
+            || "Birthdays".to_string(),
+            |server| format!("Birthdays in {server}"),
+        );
     let embed = CreateEmbed::default()
         .author(CreateEmbedAuthor::new(header))
         .description(res);
@@ -219,7 +221,7 @@ async fn wish_bday(
 /// routine that periodically checks if it is a user's birthday, and sends birthday messages
 pub async fn bday_loop(db: Arc<Mutex<Db>>, http: Arc<Http>) {
     // check every hour
-    let mut interval = interval(Duration::from_secs(3600));
+    let mut interval = interval(Duration::from_hours(1));
     loop {
         interval.tick().await;
         let now = Timestamp::now().to_zoned(TimeZone::UTC);
@@ -297,6 +299,6 @@ impl Module for Bdays {
 
 impl RegisterableModule for Bdays {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Bdays)
+        Ok(Self)
     }
 }

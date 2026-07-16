@@ -115,7 +115,7 @@ impl<C: BaseClient> Spotify<C> {
             .items
             .items
             .iter()
-            .flat_map(|item| item.item.as_ref())
+            .filter_map(|item| item.item.as_ref())
             .map(|track| match track {
                 PlayableItem::Track(FullTrack { duration, .. })
                 | PlayableItem::Episode(FullEpisode { duration, .. }) => *duration,
@@ -210,7 +210,7 @@ impl<C: BaseClient> AlbumProvider for Spotify<C> {
                 .map(|a| Album {
                     name: Some(a.name.clone()),
                     artist: a.artists.first().map(|ar| ar.name.clone()),
-                    url: a.id.as_ref().map(|i| i.url()),
+                    url: a.id.as_ref().map(Id::url),
                     release_date: a.release_date.clone(),
                     has_rich_embed: true,
                     ..Default::default()
@@ -273,7 +273,7 @@ impl<C: BaseClient> Spotify<C> {
         Ok(album.map(|a| Album {
             name: Some(a.name.clone()),
             artist: a.artists.first().map(|ar| ar.name.clone()),
-            url: a.id.as_ref().map(|i| i.url()),
+            url: a.id.as_ref().map(Id::url),
             release_date: a.release_date.clone(),
             has_rich_embed: true,
             ..Default::default()
@@ -321,7 +321,7 @@ impl Spotify<ClientCredsSpotify> {
 
         // Obtaining the access token
         spotify.request_token().await?;
-        Ok(Spotify { client: spotify })
+        Ok(Self { client: spotify })
     }
 }
 
@@ -346,7 +346,7 @@ impl Spotify<AuthCodeSpotify> {
             .prompt_for_token(&url)
             .await
             .context("failed to prompt for token")?;
-        Ok(Spotify { client })
+        Ok(Self { client })
     }
 }
 
@@ -410,10 +410,10 @@ async fn unlink(
     }
     let plural_s = if urls.len() > 1 { "s" } else { "" };
     let mut resp = format!("Resolved spotify link{plural_s} from {}", msg.link());
-    urls.into_iter().for_each(|url| {
+    for url in urls {
         resp.push('\n');
-        resp.push_str(&url)
-    });
+        resp.push_str(&url);
+    }
     CommandResponse::public(resp)
 }
 
@@ -426,7 +426,7 @@ impl Module for Spotify<ClientCredsSpotify> {
 
 impl RegisterableModule for Spotify<ClientCredsSpotify> {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Spotify::new().await
+        Self::new().await
     }
 }
 
@@ -491,10 +491,10 @@ pub async fn handle_reaction(
     }
     let plural_s = if urls.len() > 1 { "s" } else { "" };
     let mut resp = format!("Resolved spotify link{plural_s}");
-    urls.into_iter().for_each(|url| {
+    for url in urls {
         resp.push('\n');
         resp.push_str(&url);
-    });
+    }
     _ = message.reply(http, resp).await;
     Ok(())
 }

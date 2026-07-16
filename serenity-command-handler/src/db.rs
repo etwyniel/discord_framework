@@ -15,7 +15,7 @@ pub struct Db {
 }
 
 impl Db {
-    pub fn new(conn: Connection) -> anyhow::Result<Db> {
+    pub fn new(conn: Connection) -> anyhow::Result<Self> {
         block_in_place(|| {
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS guild(id INTEGER PRIMARY KEY)",
@@ -26,15 +26,15 @@ impl Db {
             conn.execute("CREATE TABLE IF NOT EXISTS enabled_guild_commands (guild_id INTEGER, command_name STRING)", [])
             .map_err(anyhow::Error::from)?;
 
-            Ok(Db { conn })
+            Ok(Self { conn })
         })
     }
 
-    pub fn conn(&self) -> &Connection {
+    pub const fn conn(&self) -> &Connection {
         &self.conn
     }
 
-    pub fn conn_mut(&mut self) -> &mut Connection {
+    pub const fn conn_mut(&mut self) -> &mut Connection {
         &mut self.conn
     }
 
@@ -132,7 +132,7 @@ impl Db {
             else {
                 return vec![];
             };
-            res.filter_map(|row| row.ok()).collect()
+            res.filter_map(Result::ok).collect()
         })
     }
 }

@@ -4,14 +4,14 @@ use std::sync::Arc;
 use jiff::SignedDuration;
 use serenity::async_trait;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Track {
     pub name: Option<String>,
     pub duration: Option<SignedDuration>,
     pub uri: Option<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Album {
     pub name: Option<String>,
     pub artist: Option<String>,
@@ -57,7 +57,7 @@ impl Album {
     pub fn format_name(&self) -> String {
         match (&self.name, &self.artist) {
             (Some(n), Some(a)) => format!("{a} - {n}"),
-            (Some(n), None) => n.to_string(),
+            (Some(n), None) => n.clone(),
             _ => "this".to_string(),
         }
     }
@@ -113,15 +113,13 @@ impl Album {
             && limit <= n_tracks
         {
             let remaining = n_tracks - limit;
-            _ = write!(&mut formatted, "-# +{remaining} more")
+            _ = write!(&mut formatted, "-# +{remaining} more");
         }
         formatted
     }
 
     pub fn as_link(&self, text: Option<&str>) -> String {
-        let text = text
-            .map(str::to_string)
-            .unwrap_or_else(|| self.format_name());
+        let text = text.map_or_else(|| self.format_name(), str::to_string);
         if let Some(link) = &self.url {
             format!("[**{text}**]({link})")
         } else {
@@ -132,10 +130,10 @@ impl Album {
     pub fn as_linked_header(&self, text: Option<&str>) -> String {
         let linked_header = text.or(self.name.as_deref()).unwrap_or("this").to_string();
         let mut header = if let Some(url) = &self.url {
-            if !self.has_rich_embed {
-                format!("# [{linked_header}](<{url}>)")
-            } else {
+            if self.has_rich_embed {
                 format!("# [{linked_header}]({url})")
+            } else {
+                format!("# [{linked_header}](<{url}>)")
             }
         } else {
             linked_header

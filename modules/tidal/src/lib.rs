@@ -38,8 +38,7 @@ async fn parse_response<T: DeserializeOwned>(resp: reqwest::Response) -> anyhow:
             .errors
             .into_iter()
             .next()
-            .map(|e| e.detail)
-            .unwrap_or("unknown error".to_string());
+            .map_or_else(|| "unknown error".to_string(), |e| e.detail);
         bail!(msg);
     }
     Ok(resp.json().await?)
@@ -79,9 +78,9 @@ impl Tidal {
 
         let token = Token {
             value: resp.access_token,
-            expiration: Timestamp::now() + SignedDuration::from_secs(resp.expires_in as i64),
+            expiration: Timestamp::now() + SignedDuration::from_secs(resp.expires_in.cast_signed()),
         };
-        Ok(self.token.write().await.insert(token).value.to_owned())
+        Ok(self.token.write().await.insert(token).value.clone())
     }
 
     /// Creates a request to a Tidal API endpoint with the specified method.
@@ -98,7 +97,7 @@ impl Tidal {
     /// Create a Tidal API client
     pub fn new(client_id: String, client_secret: String) -> Self {
         let client = reqwest::Client::new();
-        Tidal {
+        Self {
             client_id,
             client_secret,
             client,
@@ -144,7 +143,7 @@ impl Tidal {
             };
             if album.title == name {
                 let ab = Album {
-                    name: Some(album.title.to_string()),
+                    name: Some(album.title.clone()),
                     release_date: album.release_date.clone(),
                     ..Default::default()
                 };
@@ -246,7 +245,7 @@ impl AlbumProvider for Tidal {
 
         Ok(data
             .into_iter()
-            .flat_map(|album| {
+            .filter_map(|album| {
                 let artist_id = &album.relationships.artists.data.first()?.id;
                 let artist = included
                     .iter()
@@ -267,6 +266,6 @@ impl Module for Tidal {}
 
 impl RegisterableModule for Tidal {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Tidal::from_env()
+        Self::from_env()
     }
 }

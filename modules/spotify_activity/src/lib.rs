@@ -58,8 +58,8 @@ impl Module for SpotifyActivity {}
 
 impl RegisterableModule for SpotifyActivity {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(SpotifyActivity {
-            user_activities: Default::default(),
+        Ok(Self {
+            user_activities: RwLock::default(),
         })
     }
 }

@@ -59,7 +59,7 @@ async fn get_aotys(
         skip,
     };
     if let Err(e) = params.get_aotys(handler, ctx, command).await {
-        eprintln!("get aotys failed: {:?}", e);
+        eprintln!("get aotys failed: {e:?}");
         // send error message as a followup
         command
             .create_followup(
@@ -98,10 +98,10 @@ impl GetAotys {
             })
             .unwrap_or_else(|| {
                 // use supplied year or current year
-                let y = self
-                    .year
-                    .map(|yr| yr as u64)
-                    .unwrap_or_else(|| Timestamp::now().to_zoned(TimeZone::UTC).year() as u64);
+                let y = self.year.map_or_else(
+                    || Timestamp::now().to_zoned(TimeZone::UTC).year() as u64,
+                    i64::cast_unsigned,
+                );
                 y..=y
             });
         let start = year_range.start();
@@ -132,7 +132,7 @@ impl GetAotys {
         // only keep the first 25 albums, to build a 5x5 chart
         aotys.truncate(25);
         // build chart image
-        let image = create_aoty_chart(&aotys, self.skip.unwrap_or(false)).await?;
+        let image = create_aoty_chart(&aotys, self.skip.unwrap_or(false))?;
         // build response text content
         let mut content = format!("**Top albums of {} for {}**", year_fmt, self.username);
         aotys
@@ -190,7 +190,7 @@ impl TopAlbum {
 }
 
 /// Build a image chart from a list of album covers
-pub async fn create_aoty_chart(albums: &[AlbumWithImage], skip: bool) -> anyhow::Result<Vec<u8>> {
+pub fn create_aoty_chart(albums: &[AlbumWithImage], skip: bool) -> anyhow::Result<Vec<u8>> {
     // determine chart size
     let n = (albums.len() as f32).sqrt().ceil() as u32;
     eprintln!("Creating {n}x{n} chart");
@@ -242,7 +242,7 @@ impl Lastfm {
         }
 
         if current_year {
-            params.push(("period", "12month"))
+            params.push(("period", "12month"));
         }
 
         // send query
@@ -287,8 +287,11 @@ impl Lastfm {
     ) -> anyhow::Result<Vec<AlbumWithImage>> {
         let mut aotys = Vec::<TopAlbum>::new();
         let mut img_futures = Vec::new();
-        let current_year =
-            *year_range.start() == Timestamp::now().to_zoned(TimeZone::UTC).year() as u64;
+        let current_year = *year_range.start()
+            == Timestamp::now()
+                .to_zoned(TimeZone::UTC)
+                .year()
+                .cast_unsigned() as u64;
         let mut stream = Arc::clone(&self)
             .top_albums_stream(user.to_string(), current_year)
             .try_take_while(|ta| {
@@ -315,7 +318,9 @@ impl Lastfm {
                 top_albums.album.len()
             );
             let mut years: Vec<Result<u64, u64>> = vec![Err(0); top_albums.album.len()];
-            res.into_iter().for_each(|(i, year)| years[i] = year);
+            for (i, year) in res {
+                years[i] = year;
+            }
             let fetches = serenity::futures::stream::iter(
                 top_albums
                     .album
@@ -335,7 +340,8 @@ impl Lastfm {
                             );
                             async move {
                                 let last_checked =
-                                    Timestamp::from_second(last_checked as i64).unwrap_or_default();
+                                    Timestamp::from_second(last_checked.cast_signed())
+                                        .unwrap_or_default();
                                 let elapsed = Timestamp::now().duration_since(last_checked);
                                 if elapsed.as_hours() / 24 < TTL_DAYS {
                                     return Ok((i, None));
@@ -351,7 +357,7 @@ impl Lastfm {
                 Err(e) => Err(anyhow::Error::from(e)),
             })
             .map(|res| match res {
-                Ok((i, yr)) => Ok((i, yr.map(|yr| year_range.contains(&yr)).unwrap_or(false))),
+                Ok((i, yr)) => Ok((i, yr.is_some_and(|yr| year_range.contains(&yr)))),
                 Err(e) => Err(e),
             })
             .try_collect::<HashMap<usize, bool>>();
@@ -377,7 +383,7 @@ impl Lastfm {
         let mut out = Vec::with_capacity(aotys.len());
         for (album, fut) in aotys.into_iter().zip(img_futures) {
             let image = fut.await?.ok().flatten();
-            out.push(AlbumWithImage { album, image })
+            out.push(AlbumWithImage { album, image });
         }
         Ok(out)
     }

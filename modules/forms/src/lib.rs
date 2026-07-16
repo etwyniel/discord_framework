@@ -40,7 +40,7 @@ const SCOPE_FORMS_READONLY: &str = "https://www.googleapis.com/auth/forms.body.r
 
 /// Converts `s` to a string that can be used as a command or option name
 pub fn sanitize_name(s: &str) -> String {
-    let temp = s.chars().filter(|c| c.is_ascii()).collect::<String>();
+    let temp = s.chars().filter(char::is_ascii).collect::<String>();
     let it = temp
         .trim()
         .chars()
@@ -64,7 +64,7 @@ pub fn sanitize_name(s: &str) -> String {
         if c == '_' {
             if !prev_was_underscore {
                 prev_was_underscore = true;
-                out.push(c)
+                out.push(c);
             }
             continue;
         }
@@ -89,7 +89,7 @@ impl SimpleForm {
             let sanitized = sanitize_name(&q.title);
             if let Some(next) = questions.get(i + 1) {
                 let next_lower = next.title.to_lowercase();
-                if let QuestionType::Text = q.ty
+                if q.ty == QuestionType::Text
                     && (next_lower.contains("spotify") || next_lower.contains("link"))
                 {
                     // q is most likely asking for the song artist and name, which we will retrieve
@@ -203,7 +203,7 @@ impl CommandFromForm {
         guild_id: GuildId,
     ) -> anyhow::Result<CommandResponse> {
         // extract form ID from edit URL
-        let spreadsheet_url_re = Regex::new(r#"https://docs.google.com/forms/d/([^/]+)"#).unwrap();
+        let spreadsheet_url_re = Regex::new("https://docs.google.com/forms/d/([^/]+)").unwrap();
         if let Some(cap) = spreadsheet_url_re.captures(&self.form_id) {
             self.form_id = cap.get(1).unwrap().as_str().to_string();
         }
@@ -316,7 +316,7 @@ async fn refresh_command(
                 params![guild_id.get(), &command_name],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .context(format!("Command /{} not found", command_name))
+            .context(format!("Command /{command_name} not found"))
         })?
     };
     // create form command
@@ -356,7 +356,7 @@ async fn delete_command(
         .find(|cmd| cmd.name == command_name)
     {
         guild_id.delete_command(&ctx.http, cmd.id).await?;
-    };
+    }
     // delete command in database
     let db = handler.db.lock().await;
     block_in_place(|| {
@@ -431,8 +431,8 @@ async fn override_range(
         let form = forms
             .iter_mut()
             .find(|form| form.guild_id == guild_id && form.command_name == command_name)
-            .ok_or_else(|| anyhow!("Command {} not found", command_name))?;
-        form.submissions_range = range.clone();
+            .ok_or_else(|| anyhow!("Command {command_name} not found"))?;
+        form.submissions_range.clone_from(&range);
     }
     // update form in DB
     let db = handler.db.lock().await;
@@ -549,9 +549,9 @@ impl SimpleForm {
                     if let Some(p) = lookup.providers().iter().find(|p| p.url_matches(&value)) {
                         let album = p.get_from_url(&value).await?;
                         let album_info = album.format_name();
-                        next_value = Some(album_info.to_string());
+                        next_value = Some(album_info.clone());
                         value = album.url.as_deref().unwrap_or_default().to_string();
-                        song_infos.push(album_info)
+                        song_infos.push(album_info);
                     }
                 } else {
                     let song = spotify.get_song_from_url(&value).await?;
@@ -566,7 +566,7 @@ impl SimpleForm {
                     next_value = Some(song_info.clone());
                     value = song.id.unwrap().url();
                     song_infos.push(song_info);
-                    song_urls.push(value.to_string());
+                    song_urls.push(value.clone());
                 }
             }
             value_pairs.push((question_id, value));
@@ -589,15 +589,15 @@ impl SimpleForm {
             bail!("Failed to send response: status {}", resp.status());
         }
 
-        let contents = if !song_infos.is_empty() {
+        let contents = if song_infos.is_empty() {
+            format!("Submitted to **{}**", self.title)
+        } else {
             let songs = song_infos
                 .iter()
                 .zip(&song_urls)
                 .map(|(info, url)| format!("[{info}]({url})"))
                 .join(", ");
             format!("Submitted {songs} to **{}**", self.title)
-        } else {
-            format!("Submitted to **{}**", self.title)
         };
         CommandResponse::private(contents)
     }
@@ -640,7 +640,7 @@ impl SimpleForm {
             .map(|row| {
                 row.iter()
                     .skip(1) // skip timestamp and username
-                    .flat_map(|v| v.as_str())
+                    .filter_map(|v| v.as_str())
                     .filter(|value| !(value.is_empty() || value.starts_with("https://")))
                     .join(" - ")
             })
@@ -713,7 +713,7 @@ impl Forms {
             let guild_id = cmd.guild_id()?.get();
             let data = &cmd.data;
             // find form definition
-            let forms = handler.module::<Forms>()?.forms.read().await;
+            let forms = handler.module::<Self>()?.forms.read().await;
             let form = forms
                 .iter()
                 .find(|form| form.guild_id == guild_id && form.command_name == data.name);
@@ -760,7 +760,7 @@ impl Module for Forms {
         store.register(GET_SUBMISSIONS);
         store.register(OVERRIDE_SUBMISSION_RANGE);
 
-        store.register(Forms::complete_forms as CompletionHandler);
+        store.register(Self::complete_forms as CompletionHandler);
     }
 }
 
@@ -780,8 +780,8 @@ impl RegisterableModule for Forms {
         let forms_client = FormsClient {
             authenticator: forms_authenticator,
         };
-        let forms = Default::default();
-        Ok(Forms {
+        let forms = Arc::default();
+        Ok(Self {
             sheets,
             forms_client,
             forms,

@@ -7,7 +7,9 @@ use reqwest::{Url, redirect::Policy};
 use serenity::{
     all::GuildId,
     async_trait,
-    builder::{CreateInteractionResponse, EditInteractionResponse},
+    builder::{
+        CreateInteractionResponse, CreateInteractionResponseMessage, EditInteractionResponse,
+    },
     model::{Permissions, application::CommandInteraction},
     prelude::Context,
 };
@@ -71,7 +73,7 @@ impl Variables {
             .and_then(|val| val.as_str())
             .and_then(|val| val.parse().ok())
             .unwrap_or(1);
-        Ok(Variables {
+        Ok(Self {
             last_row,
             edition,
             last_playlist,
@@ -231,7 +233,7 @@ async fn do_build_playlist<'a, 'b: 'a>(
     }
     let items = picks_resolved
         .iter()
-        .flat_map(|pick| {
+        .filter_map(|pick| {
             let Ok(url) = Url::parse(&pick.link) else {
                 invalid.push((pick.clone(), format!("not a url: {}", pick.link)));
                 return None;
@@ -306,7 +308,7 @@ async fn build_playlist_from_picks(
         .ok_or_else(|| anyhow!("No playlist sheet configured for this server."))?;
     let Variables {
         last_row: _,
-        edition,
+        edition: last_edition,
         last_playlist,
         current_row,
     } = Variables::get(handler, &spreadsheet_id).await?;
@@ -331,7 +333,7 @@ async fn build_playlist_from_picks(
         .get_guild_field::<String>(guild_id.get(), "spotify_user_id")
         .await?
         .ok_or_else(|| anyhow!("No Spotify user ID configured for this server."))?;
-    let edition = edition + if increment_edition { 1 } else { 0 };
+    let edition = last_edition + if increment_edition { 1 } else { 0 };
     let (playlist, valid, invalid) =
         do_build_playlist(handler, guild_id, &user_id, &picks, playlist_id, edition).await?;
     let nvalid = valid.len();
@@ -401,12 +403,9 @@ async fn build_playlist_from_picks(
         .await
         .context("failed to save variables to spreadsheet")?;
     let mut resp = if last_playlist.is_none() || increment_edition {
-        format!("Created a playlist with {nvalid} tracks.\n{}", playlist_url)
+        format!("Created a playlist with {nvalid} tracks.\n{playlist_url}")
     } else {
-        format!(
-            "Added {nvalid} tracks to existing playlist.\n{}",
-            playlist_url
-        )
+        format!("Added {nvalid} tracks to existing playlist.\n{playlist_url}")
     };
     if !invalid.is_empty() {
         _ = write!(
@@ -414,13 +413,13 @@ async fn build_playlist_from_picks(
             "\n{} picks were invalid and could not be added:",
             invalid.len()
         );
-        invalid.into_iter().for_each(|(pick, reason)| {
+        for (pick, reason) in invalid {
             _ = write!(
                 &mut resp,
                 "\n{}'s pick ({}): {}",
                 pick.submitter, pick.song, reason
             );
-        })
+        }
     }
     Ok(resp)
 }
@@ -445,7 +444,7 @@ async fn build_playlist(
     command
         .create_response(
             &ctx.http,
-            CreateInteractionResponse::Defer(Default::default()),
+            CreateInteractionResponse::Defer(CreateInteractionResponseMessage::default()),
         )
         .await?;
     let guild_id = command.guild_id()?;
@@ -480,7 +479,7 @@ impl Module for PlaylistBuilder {
 
 impl RegisterableModule for PlaylistBuilder {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(PlaylistBuilder {})
+        Ok(Self {})
     }
 
     async fn add_dependencies(builder: HandlerBuilder) -> anyhow::Result<HandlerBuilder> {

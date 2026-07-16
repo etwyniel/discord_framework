@@ -64,7 +64,7 @@ pub fn do_query(
                     ValueRef::Text(t) => Some(String::from_utf8_lossy(t).to_string()),
                     ValueRef::Blob(_) => Some("<binary data>".to_string()),
                 };
-                result.push(value)
+                result.push(value);
             }
             Ok(result)
         })?
@@ -118,6 +118,6 @@ impl Module for Sql {
 
 impl RegisterableModule for Sql {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Sql)
+        Ok(Self)
     }
 }

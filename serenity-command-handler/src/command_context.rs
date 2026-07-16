@@ -33,21 +33,17 @@ pub async fn create_response_with_token(
     interaction_id: InteractionId,
     interaction_token: &str,
 ) -> anyhow::Result<Option<Message>> {
-    let ContentAndFlags(contents, embeds, attachments, flags) =
-        match contents.to_contents_and_flags() {
-            None => return Ok(None),
-            Some(c) => c,
-        };
+    let Some(ContentAndFlags(contents, embeds, attachments, flags)) =
+        contents.to_contents_and_flags()
+    else {
+        return Ok(None);
+    };
     let mut msg = CreateInteractionResponseMessage::new();
     msg = embeds
         .into_iter()
         .flatten()
-        .fold(msg, |msg, embed| msg.add_embed(embed));
-    let roles = if let Some(r) = role_id {
-        vec![RoleId::new(r)]
-    } else {
-        Vec::new()
-    };
+        .fold(msg, CreateInteractionResponseMessage::add_embed);
+    let roles = role_id.map(|r| vec![RoleId::new(r)]).unwrap_or_default();
     msg = msg
         .content(&contents)
         .flags(flags)
@@ -169,11 +165,11 @@ impl InteractionExt for ModalInteraction {
         http: &Http,
         builder: CreateInteractionResponse<'_>,
     ) -> serenity::Result<()> {
-        ModalInteraction::create_response(self, http, builder).await
+        Self::create_response(self, http, builder).await
     }
 
     async fn get_response(&self, http: &Http) -> serenity::Result<Message> {
-        ModalInteraction::get_response(self, http).await
+        Self::get_response(self, http).await
     }
 }
 
@@ -215,11 +211,11 @@ impl InteractionExt for ComponentInteraction {
         http: &Http,
         builder: CreateInteractionResponse<'_>,
     ) -> serenity::Result<()> {
-        ComponentInteraction::create_response(self, http, builder).await
+        Self::create_response(self, http, builder).await
     }
 
     async fn get_response(&self, http: &Http) -> serenity::Result<Message> {
-        ComponentInteraction::get_response(self, http).await
+        Self::get_response(self, http).await
     }
 }
 
@@ -280,22 +276,18 @@ impl<T: InteractionExt + Sync> Responder for T {
         contents: CommandResponse,
         role_id: Option<u64>,
     ) -> anyhow::Result<Option<Message>> {
-        let ContentAndFlags(contents, embeds, attachments, flags) =
-            match contents.to_contents_and_flags() {
-                None => return Ok(None),
-                Some(c) => c,
-            };
+        let Some(ContentAndFlags(contents, embeds, attachments, flags)) =
+            contents.to_contents_and_flags()
+        else {
+            return Ok(None);
+        };
         self.create_response(http, {
             let mut msg = CreateInteractionResponseMessage::new();
             msg = embeds
                 .into_iter()
                 .flatten()
-                .fold(msg, |msg, embed| msg.add_embed(embed));
-            let roles = if let Some(r) = role_id {
-                vec![RoleId::new(r)]
-            } else {
-                Vec::new()
-            };
+                .fold(msg, CreateInteractionResponseMessage::add_embed);
+            let roles = role_id.map(|r| vec![RoleId::new(r)]).unwrap_or_default();
             msg = msg
                 .content(&contents)
                 .flags(flags)

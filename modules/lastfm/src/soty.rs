@@ -7,6 +7,7 @@ use jiff::tz::TimeZone;
 use serenity::all::{
     CommandInteraction, Context, CreateEmbed, CreateInteractionResponse, EditInteractionResponse,
 };
+use serenity::builder::CreateInteractionResponseMessage;
 use tokio::sync::Mutex;
 
 use super::Lastfm;
@@ -43,7 +44,7 @@ async fn get_soty(
     command
         .create_response(
             &ctx.http,
-            CreateInteractionResponse::Defer(Default::default()),
+            CreateInteractionResponse::Defer(CreateInteractionResponseMessage::default()),
         )
         .await?;
     let params = GetSotys {
@@ -62,10 +63,10 @@ impl GetSotys {
         ctx: &Context,
         opts: &CommandInteraction,
     ) -> anyhow::Result<()> {
-        let year = self
-            .year
-            .map(|yr| yr as u64)
-            .unwrap_or_else(|| Timestamp::now().to_zoned(TimeZone::UTC).year() as u64);
+        let year = self.year.map_or_else(
+            || Timestamp::now().to_zoned(TimeZone::UTC).year() as u64,
+            |yr| yr as u64,
+        );
         let lastfm: Arc<Lastfm> = handler.module_arc()?;
         let tidal: Arc<Tidal> = handler.module_arc()?;
         let mut songs = lastfm
@@ -101,7 +102,7 @@ impl Lastfm {
         let mut sotys = Vec::<TopTrack>::new();
         let mut page = 1;
         let mut top_songs_fut = Some(tokio::spawn({
-            let user = user.to_string();
+            let user = user.clone();
             let lastfm = Arc::clone(&self);
             let page = page;
             async move { lastfm.get_top_tracks(&user, Some(page)).await }
@@ -124,7 +125,7 @@ impl Lastfm {
             if page < total_pages && last_plays.unwrap_or_default() >= 5 {
                 page += 1;
                 top_songs_fut = Some(tokio::spawn({
-                    let user = user.to_string();
+                    let user = user.clone();
                     let lastfm = Arc::clone(&self);
                     let page = page;
                     async move { lastfm.get_top_tracks(&user, Some(page)).await }
@@ -141,7 +142,7 @@ impl Lastfm {
                     Ok(year) => Some(year),
                     Err(last_checked) => {
                         let last_checked =
-                            Timestamp::from_second(last_checked as i64).unwrap_or_default();
+                            Timestamp::from_second(last_checked.cast_signed()).unwrap_or_default();
                         let elapsed = Timestamp::now().duration_since(last_checked);
                         if elapsed.as_hours() / 24 < TTL_DAYS {
                             None
@@ -161,7 +162,7 @@ impl Lastfm {
                 };
                 if yr != year {
                     continue;
-                };
+                }
                 sotys.push(song.clone());
                 if sotys.len() >= 25 {
                     break;

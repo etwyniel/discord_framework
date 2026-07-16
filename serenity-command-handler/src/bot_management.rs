@@ -34,6 +34,10 @@ async fn enable_command_for_guild(
     let Some((_, runner)) = commands.0.iter().find(|&((name, _), _)| *name == cmd) else {
         return CommandResponse::private(format!("command {cmd} not found"));
     };
+    // register command in target guild
+    let mut builder = CreateCommand::new(runner.name).description(runner.description);
+    builder = (runner.register_options)(builder);
+    drop(commands);
     // save in DB
     let guild = GuildId::new(guild_id);
     handler
@@ -41,9 +45,6 @@ async fn enable_command_for_guild(
         .lock()
         .await
         .set_command_enabled_for_guild(&cmd, guild, true)?;
-    // register command in target guild
-    let mut builder = CreateCommand::new(runner.name).description(runner.description);
-    builder = (runner.register_options)(builder);
     guild.create_command(&ctx.http, builder).await?;
     CommandResponse::public(format!(
         "Enabled command '{cmd}' for guild with id `{guild_id:?}`"
@@ -69,7 +70,9 @@ async fn disable_command_for_guild(
     let commands = handler.commands.read().await;
     if !commands.0.iter().any(|(&(name, _), _)| name == cmd) {
         return CommandResponse::private(format!("command {cmd} not found"));
-    };
+    }
+    // drop mutex read guard
+    drop(commands);
     // save in DB
     let guild = GuildId::new(guild_id);
     handler
@@ -105,9 +108,8 @@ impl ModManagement {
                 return Ok(false);
             }
             let options = &ac.data.options;
-            let focused = match get_focused_option(options) {
-                Some(opt) => opt,
-                None => return Ok(true),
+            let Some(focused) = get_focused_option(options) else {
+                return Ok(true);
             };
             let partial = get_str_opt_ac(options, focused).unwrap_or_default();
             if focused == "guild" {
@@ -119,7 +121,7 @@ impl ModManagement {
                     last = guilds.last().map(|g| g.id);
                     for g in guilds {
                         if choices.len() < 25 && (partial.is_empty() || g.name.contains(partial)) {
-                            choices.push((g.id.to_string(), g.name))
+                            choices.push((g.id.to_string(), g.name));
                         }
                     }
                     if last.is_none() {
@@ -137,7 +139,7 @@ impl ModManagement {
             }
             if focused == "command" {
                 let commands = handler.commands.read().await;
-                let choices: Vec<String> = commands
+                let resp = commands
                     .0
                     .iter()
                     .filter(|((name, _), runner)| {
@@ -145,13 +147,10 @@ impl ModManagement {
                     })
                     .map(|(&(name, _), _)| name.to_string())
                     .take(25)
-                    .collect();
-
-                let resp = choices
-                    .into_iter()
                     .fold(CreateAutocompleteResponse::new(), |resp, command| {
                         resp.add_choice(command)
                     });
+                drop(commands);
                 ac.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(resp))
                     .await?;
             }
@@ -172,6 +171,6 @@ impl Module for ModManagement {
         store.register(ENABLE_COMMAND);
         store.register(DISABLE_COMMAND);
 
-        store.register(ModManagement::complete_management_command as CompletionHandler);
+        store.register(Self::complete_management_command as CompletionHandler);
     }
 }

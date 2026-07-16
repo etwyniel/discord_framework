@@ -13,6 +13,8 @@ use serde_derive::{Deserialize, Serialize};
 use serenity::async_trait;
 use serenity::futures::FutureExt;
 use serenity::futures::future::BoxFuture;
+use serenity::model::Permissions;
+use serenity::model::id::ChannelId;
 use serenity::prelude::Context;
 use serenity_command_handler::RegisterableModule;
 use serenity_command_handler::{HandlerBuilder, Module, db::Db};
@@ -93,14 +95,13 @@ impl ResolvedLp {
         info: &Album,
         role_id: Option<u64>,
         desc: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> String {
         let when = self.format_time(info.duration);
         let hyperlinked = info.as_linked_header(self.resolved_title.as_deref());
         let mut resp_content = format!(
             "{}{SEPARATOR}\n{hyperlinked}\n{SEPARATOR}\n{when}\n",
             role_id // mention role if set
-                .map(|id| format!("<@&{id}>"))
-                .unwrap_or_else(|| "Listening party: ".to_string()),
+                .map_or_else(|| "Listening party: ".to_string(),|id| format!("<@&{id}>")),
         );
 
         // add album info
@@ -122,7 +123,7 @@ impl ResolvedLp {
             if add_sep {
                 resp_content.push_str(" | ");
             }
-            _ = write!(&mut resp_content, "{}", genres);
+            _ = write!(&mut resp_content, "{genres}");
         }
         // encode resolved LP as a URL to hide in the LP message
         // can be retrieved later when editing
@@ -148,7 +149,7 @@ impl ResolvedLp {
                 resp_content.push_str(track_info.trim());
             }
         }
-        Ok(resp_content)
+        resp_content
     }
 }
 
@@ -198,10 +199,10 @@ fn build_message_contents(
     role_id: Option<u64>,
     resolved_start: Option<Timestamp>,
     desc: Option<&str>,
-) -> anyhow::Result<String> {
+) -> String {
     let resolved = ResolvedLp {
         resolved_start,
-        resolved_title: lp_name.map(|s| s.to_string()),
+        resolved_title: lp_name.map(str::to_string),
         resolved_link: info.url.clone(),
         resolved_duration_s: info.duration.map(|d| d.as_secs()),
         params: lp,
@@ -217,7 +218,7 @@ async fn find_album<'a>(
     provider: Option<&str>,
 ) -> anyhow::Result<(Option<&'a str>, Album)> {
     let mut lp_name = Some(album);
-    if lp_name.map(|name| name.starts_with("https://")) == Some(true) {
+    if lp_name.is_some_and(|name| name.starts_with("https://")) {
         // As a special case for convenience, if we have a URL in lp_name, use that as link
         if link.is_some() && link != lp_name {
             lp_name = None;
@@ -229,18 +230,18 @@ async fn find_album<'a>(
     // Depending on what we have, look up more information
     let info = match (lp_name, &link) {
         (Some(name), None) => lookup.lookup_album(name, provider).await?,
-        (name, Some(lnk)) => {
-            let mut info = lookup.get_album_info(lnk).await?;
+        (name, Some(link)) => {
+            let mut info = lookup.get_album_info(link).await?;
             if let Some((info, name)) = info.as_mut().zip(name) {
-                info.name = Some(name.to_string())
-            };
+                info.name = Some(name.to_string());
+            }
             info
         }
         (None, None) => bail!("Please specify something to LP"),
     }
     .unwrap_or_else(|| Album {
-        url: link.map(|s| s.to_string()),
-        ..Default::default()
+        url: link.map(str::to_string),
+        ..Album::default()
     });
     Ok((lp_name, info))
 }
@@ -300,7 +301,7 @@ impl Lp {
         handler: &Handler,
         guild_id: GuildId,
     ) -> anyhow::Result<(ResolvedLp, Album)> {
-        let Lp {
+        let Self {
             album,
             link,
             provider,
@@ -313,11 +314,11 @@ impl Lp {
         let lp_name = if link.is_none() {
             info.name.clone()
         } else {
-            lp_name.map(|s| s.to_string())
+            lp_name.map(str::to_string)
         };
         // get genres if needed
         if let Some(genres) = get_lastfm_genres(handler, &info).await {
-            info.genres = genres
+            info.genres = genres;
         }
         let role_id = if role.is_some() {
             *role
@@ -332,7 +333,7 @@ impl Lp {
         let resolved_start = self.resolve_time();
         let resolved = ResolvedLp {
             resolved_start,
-            resolved_title: lp_name.map(|s| s.to_string()),
+            resolved_title: lp_name,
             resolved_link: info.url.clone(),
             resolved_duration_s: info.duration.map(|d| d.as_secs()),
             params: self,
@@ -347,7 +348,7 @@ impl Lp {
         resolved_start: Option<Timestamp>,
         desc: Option<&str>,
     ) -> anyhow::Result<(String, Option<u64>, Album)> {
-        let Lp {
+        let Self {
             album,
             link,
             provider,
@@ -357,17 +358,17 @@ impl Lp {
         let album = album.trim();
         let link = link.as_deref().map(str::trim);
         let (lp_name, mut info) = find_album(handler, album, link, provider.as_deref()).await?;
-        let lp_name = lp_name.map(|s| s.to_string());
+        let lp_name = lp_name.map(str::to_string);
         // get genres if needed
         if let Some(genres) = get_lastfm_genres(handler, &info).await {
-            info.genres = genres
+            info.genres = genres;
         }
         let guild_id = command.guild_id()?.get();
         let mut role_id = handler
             .get_guild_field(guild_id, "role_id")
             .await
             .context("error retrieving LP role")?;
-        role_id = role.map(|r| r.get()).or(role_id);
+        role_id = role.map(RoleId::get).or(role_id);
         let resp_content = build_message_contents(
             self,
             lp_name.as_deref(),
@@ -375,7 +376,7 @@ impl Lp {
             role_id,
             resolved_start,
             desc,
-        )?;
+        );
         Ok((resp_content, role_id, info))
     }
 
@@ -438,7 +439,7 @@ impl Lp {
                 .content(resp)
                 .allowed_mentions(allowed_mentions);
             if let Some(att) = cover_attachment {
-                create_followup = create_followup.add_file(att)
+                create_followup = create_followup.add_file(att);
             }
             create_followup
                 .execute(http, None, interaction.token)
@@ -448,7 +449,7 @@ impl Lp {
                 .content(resp)
                 .allowed_mentions(allowed_mentions);
             if let Some(att) = cover_attachment {
-                create_msg = create_msg.add_file(att)
+                create_msg = create_msg.add_file(att);
             }
             CreateInteractionResponse::Message(create_msg)
                 .execute(http, interaction.id, interaction.token)
@@ -541,23 +542,23 @@ impl Lp {
             interaction.channel_id,
             (message.id, interaction.member.user.id),
         );
-        let mut response = format!(
-            "LP created: {}",
-            message.id.link(message.channel_id, Some(guild_id))
-        );
-        if let Some(r) =
-            Self::create_thread(handler, http, &message, info, guild_id, webhook.as_deref()).await?
-        {
-            response = r;
-        }
+        let response =
+            Self::create_thread(handler, http, &message, info, guild_id, webhook.as_deref())
+                .await?
+                .unwrap_or_else(|| {
+                    format!(
+                        "LP created: {}",
+                        message.id.link(message.channel_id, Some(guild_id))
+                    )
+                });
         if let Some(wh) = wh {
             // If we used a webhook, we still need to create the interaction response
-            let response = if wh.channel_id.map(|id| id.get()) == Some(interaction.channel_id.get())
-            {
-                CommandResponse::Private(response.into())
-            } else {
-                CommandResponse::Public(response.into())
-            };
+            let response =
+                if wh.channel_id.map(ChannelId::get) == Some(interaction.channel_id.get()) {
+                    CommandResponse::Private(response.into())
+                } else {
+                    CommandResponse::Public(response.into())
+                };
             if is_followup {
                 if let Some(ContentAndFlags(contents, embeds, _, flags)) =
                     response.to_contents_and_flags()
@@ -596,7 +597,7 @@ impl Lp {
         }
         let (resolved, info) = self.resolve(handler, guild_id).await?;
         let resp_content =
-            resolved.build_message_contents(&info, resolved.params.role.map(RoleId::get), desc)?;
+            resolved.build_message_contents(&info, resolved.params.role.map(RoleId::get), desc);
         Self::send(
             handler,
             &resolved,
@@ -756,10 +757,7 @@ async fn edit_lp(
     let mut msg = ctx.http.get_message(command.channel_id, message_id).await?;
     if user_id != author_id
         && let Some(member) = &command.member
-        && !member
-            .permissions
-            .map(|p| p.manage_events())
-            .unwrap_or_default()
+        && !member.permissions.is_some_and(Permissions::manage_events)
     {
         return CommandResponse::private("Cannot edit listening party");
     }
@@ -791,7 +789,7 @@ async fn edit_lp(
             new_content
                 .splitn(3, SEPARATOR)
                 .enumerate()
-                .map(|(i, s)| if i != 1 { s } else { &hyperlinked })
+                .map(|(i, s)| if i == 1 { &hyperlinked } else { s })
                 .join(&SEPARATOR.to_string()),
         );
         _ = writeln!(&mut resp, "Listening party album updated to {hyperlinked}");
@@ -859,10 +857,7 @@ async fn edit_listening_party(
     // check that user can edit this LP
     if user_id != author_id
         && let Some(member) = &command.member
-        && !member
-            .permissions
-            .map(|p| p.manage_events())
-            .unwrap_or_default()
+        && !member.permissions.is_some_and(Permissions::manage_events)
     {
         return CommandResponse::private("Cannot edit listening party");
     }
@@ -1039,7 +1034,7 @@ impl Module for ModLp {
         store.register(lp_creator::SUBMIT_CREATE_LP);
         store.register(lp_creator::CHANGE_LP_ROLE);
         store.register(lp_creator::BUTTON_SEND_LP);
-        store.register(ModLp::complete_lp as CompletionHandler);
+        store.register(Self::complete_lp as CompletionHandler);
     }
 }
 
@@ -1059,6 +1054,6 @@ impl RegisterableModule for ModLp {
     }
 
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(ModLp::default())
+        Ok(Self::default())
     }
 }

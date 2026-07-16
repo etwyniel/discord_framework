@@ -135,13 +135,13 @@ impl Handler {
         let mut builder = HandlerBuilder {
             db,
             management_guild,
-            commands: Default::default(),
-            modal_commands: Default::default(),
-            component_commands: Default::default(),
-            modules: Default::default(),
-            module_list: Default::default(),
-            special_commands: Default::default(),
-            completion_handlers: Default::default(),
+            commands: CommandStore::default(),
+            modal_commands: ModalCommandStore::default(),
+            component_commands: ComponentCommandStore::default(),
+            modules: ModuleMap::default(),
+            module_list: Vec::default(),
+            special_commands: HashMap::default(),
+            completion_handlers: Vec::default(),
             default_command_handler: None,
             event_dispatcher: events::EventDispatcher::default(),
         };
@@ -224,7 +224,7 @@ impl Handler {
                         return;
                     }
                     Ok(true) => break,
-                    Ok(false) => continue,
+                    Ok(false) => {}
                 }
             }
             // if let Some(handler) = self.completion_handlers.get(&key) {
@@ -249,10 +249,7 @@ impl Handler {
             let start = Instant::now();
             let resp = self.process_command(ctx, command).await;
             let elapsed = start.elapsed();
-            eprintln!(
-                "{guild_name}{user}: /{name} -({:.1?})-> {:?}",
-                elapsed, resp
-            );
+            eprintln!("{guild_name}{user}: /{name} -({elapsed:.1?})-> {resp:?}");
             let resp = match resp {
                 Ok(resp) => resp,
                 Err(e) => CommandResponse::Private(e.to_string().into()),
@@ -278,10 +275,7 @@ impl Handler {
             let start = Instant::now();
             let resp = self.process_modal(ctx, modal).await;
             let elapsed = start.elapsed();
-            eprintln!(
-                "{guild_name}{user}: |>{name} -({:.1?})-> {:?}",
-                elapsed, resp
-            );
+            eprintln!("{guild_name}{user}: |>{name} -({elapsed:.1?})-> {resp:?}");
             let resp = match resp {
                 Ok(CommandResponse::Ack) => {
                     _ = modal
@@ -313,10 +307,7 @@ impl Handler {
             let start = Instant::now();
             let resp = self.process_component(ctx, component).await;
             let elapsed = start.elapsed();
-            eprintln!(
-                "{guild_name}{user}: [>{name} -({:.1?})-> {:?}",
-                elapsed, resp
-            );
+            eprintln!("{guild_name}{user}: [>{name} -({elapsed:.1?})-> {resp:?}");
             let resp = match resp {
                 Ok(CommandResponse::Ack) => {
                     _ = component
@@ -425,7 +416,7 @@ impl HandlerBuilder {
     }
 
     pub fn build(self) -> Arc<Handler> {
-        let HandlerBuilder {
+        let Self {
             db,
             management_guild,
             commands,

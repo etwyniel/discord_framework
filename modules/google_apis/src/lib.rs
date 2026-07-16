@@ -64,7 +64,7 @@ struct AuthTokenResponse {
 #[derive(Debug)]
 #[allow(unused)]
 pub struct AccessToken {
-    access_token: String,
+    token: String,
     token_type: String,
     exp: Timestamp,
 }
@@ -126,7 +126,7 @@ impl Credentials {
         } = req.send().await?.json().await?;
 
         Ok(AccessToken {
-            access_token,
+            token: access_token,
             token_type,
             exp: Timestamp::now() + SignedDuration::from_secs(expires_in),
         })
@@ -158,18 +158,18 @@ impl Authenticator {
         if let Some(token) = self.token.read().await.as_ref()
             && token.is_valid()
         {
-            return Ok(token.access_token.clone());
+            return Ok(token.token.clone());
         }
         let mut write_lock = self.token.write().await;
         // check if token has already been refreshed while waiting for the lock
         if let Some(token) = write_lock.as_ref()
             && token.is_valid()
         {
-            return Ok(token.access_token.clone());
+            return Ok(token.token.clone());
         }
 
         let new_token = self.credentials.request_token(self.scopes).await?;
-        let res = new_token.access_token.clone();
+        let res = new_token.token.clone();
         *write_lock = Some(new_token);
         Ok(res)
     }

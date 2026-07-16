@@ -58,15 +58,14 @@ pub async fn message_to_quote_contents(
         .reactions
         .iter()
         .find_position(|r| r.reaction_type == ReactionType::from_str("🗨️").unwrap())
-        .map(|(ndx, _)| ndx)
-        .unwrap_or(message.reactions.len());
+        .map_or(message.reactions.len(), |(ndx, _)| ndx);
     // look at emoji before quote emoji (or last emoji if the message action was used)
     let prev_react = message
         .reactions
         .get(quote_ndx.wrapping_sub(1))
         .map(|r| &r.reaction_type);
     // allocate list of message content + message author id
-    let mut messages: Vec<(String, u64)> = Default::default();
+    let mut messages: Vec<(String, u64)> = Vec::default();
     if let Some(ReactionType::Unicode(emoji)) = prev_react {
         // number reactions are structured as:
         // <ascii digit><variation selector><enclosing keycap>
@@ -186,7 +185,7 @@ pub fn fetch_quote(db: &Db, guild_id: u64, quote_number: u64) -> anyhow::Result<
             let ty = match row
                 .get::<_, String>(0)?
                 .as_str()
-                .split_once("/")
+                .split_once('/')
                 .map(|(ty, _)| ty)
                 .unwrap_or_default()
             {
@@ -308,7 +307,7 @@ impl CaseInsensitiveString<'_> {
         CaseInsensitiveString(s, hasher.finish())
     }
 
-    fn hash(&self) -> u64 {
+    const fn hash(&self) -> u64 {
         self.1
     }
 }
@@ -457,8 +456,7 @@ async fn create_quote_embed(http: &Http, quote: &Quote) -> anyhow::Result<QuoteE
         .await;
     let channel_name = channel
         .as_ref()
-        .map(|c| c.base.name.as_str())
-        .unwrap_or("unknown-channel")
+        .map_or("unknown-channel", |c| c.base.name.as_str())
         .to_owned();
     let contents = format!(
         "{}\n- <@{}> [(Source)]({})",
@@ -494,7 +492,7 @@ impl GetQuote {
             if let Some(quote_number) = self.number {
                 fetch_quote(db.borrow(), guild_id, quote_number as u64)?
             } else {
-                get_random_quote(db.borrow(), guild_id, self.user.map(|u| u.get()))?
+                get_random_quote(db.borrow(), guild_id, self.user.map(UserId::get))?
             }
         }
         .ok_or_else(|| anyhow!("No such quote"))?;
@@ -506,7 +504,7 @@ impl GetQuote {
         } = create_quote_embed(&ctx.http, &quote).await?;
         let hide_author = self.hide_author == Some(true);
         let quote_header = match (self.user, self.number, hide_author) {
-            (_, Some(_), _) => "".to_string(), // Set quote number, not random
+            (_, Some(_), _) => String::new(), // Set quote number, not random
             (Some(_), _, false) => format!(" - Random quote from {}", quote.author_name),
             (Some(_), _, true) => " - Random quote from REDACTED".to_string(),
             (None, None, _) => " - Random quote".to_string(),
@@ -524,15 +522,16 @@ impl GetQuote {
                 CreateEmbedAuthor::new(format!("#{}{}", quote.quote_number, quote_header))
                     .icon_url(author_avatar.unwrap_or_default()),
             )
-            .description(contents.clone())
+            .description(contents)
             .url(message_url)
             .footer(CreateEmbedFooter::new(format!("in #{channel_name}")))
             .timestamp(model::Timestamp::from_unix_timestamp(quote.ts.as_second())?);
-        let mut has_image = false;
-        if let Some(image) = quote.image {
+        let mut has_image = if let Some(image) = quote.image {
             create = create.image(image, None);
-            has_image = true;
-        }
+            true
+        } else {
+            false
+        };
         let mut attachments = vec![];
         for (i, att) in quote.attachments.into_iter().enumerate() {
             if att.ty == AttachmentType::Image && !has_image {
@@ -629,7 +628,7 @@ async fn get_fake_quote(
             .guild_id
             .ok_or_else(|| anyhow!("must be run in a guild"))?
             .get(),
-        user.map(|u| u.get()),
+        user.map(UserId::get),
         order,
     )
     .await?;
@@ -690,11 +689,12 @@ pub async fn send_qotd(
         .timestamp(model::Timestamp::from_unix_timestamp(qotd.ts.as_second())?);
 
     // build attachments
-    let mut has_image = false;
-    if let Some(image) = qotd.image {
+    let mut has_image = if let Some(image) = qotd.image {
         embed = embed.image(image, None);
-        has_image = true;
-    }
+        true
+    } else {
+        false
+    };
     let mut attachments = vec![];
     for (i, att) in qotd.attachments.iter().enumerate() {
         if att.ty == AttachmentType::Image && !has_image {
@@ -868,12 +868,12 @@ impl Module for Quotes {
         store.register(GET_QUOTE);
         store.register(SAVE_QUOTE);
         store.register(FAKE_QUOTE);
-        store.register(Quotes::complete_quotes as CompletionHandler);
+        store.register(Self::complete_quotes as CompletionHandler);
     }
 }
 
 impl RegisterableModule for Quotes {
     async fn init(_: &ModuleMap) -> anyhow::Result<Self> {
-        Ok(Quotes)
+        Ok(Self)
     }
 }
