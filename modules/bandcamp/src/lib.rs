@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use itertools::Itertools;
 use jiff::SignedDuration;
 use reqwest::{Client, Url};
@@ -69,13 +69,19 @@ impl Bandcamp {
         }
     }
 
+    fn get(&self, url: Url) -> reqwest::RequestBuilder {
+        self.client
+            .get(url)
+            .header(reqwest::header::USER_AGENT, "lpbot (0.1.0)")
+    }
+
     async fn query_albums(&self, q: &str) -> anyhow::Result<Html> {
         let mut query_url = Url::parse(SEARCH_URL).unwrap();
         query_url
             .query_pairs_mut()
             .append_pair("q", q)
             .append_pair("item_type", "a"); // album type
-        let page = self.client.get(query_url).send().await?.text().await?;
+        let page = self.get(query_url).send().await?.text().await?;
         Ok(Html::parse_document(&page))
     }
 }
@@ -95,8 +101,18 @@ impl AlbumProvider for Bandcamp {
         };
         let url_string = url.to_string();
 
-        let page = self.client.get(url).send().await?.text().await?;
+        let resp = self.get(url).send().await?;
+        let status = resp.status();
+        let page = resp.text().await?;
+        if !status.is_success() {
+            return Err(anyhow!("failed with status {status}:\n{page}"));
+        }
         let html = Html::parse_document(&page);
+
+        let page_title_selector = Selector::parse("head>title").unwrap();
+        if let Some("Client Challenge") = contents(&html, &page_title_selector).as_deref() {
+            bail!("Failed to get album information due to Bandcamp's anti-scraping measures")
+        }
 
         // extract metadata
 
