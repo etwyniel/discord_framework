@@ -49,7 +49,7 @@ pub async fn create_response_with_token(
         .flags(flags)
         .allowed_mentions(CreateAllowedMentions::new().roles(roles));
     for (url, filename) in attachments.into_iter().flatten() {
-        msg = msg.add_file(CreateAttachment::url(http, url, filename).await?);
+        msg = msg.add_file(CreateAttachment::url(url, filename).await?);
     }
     CreateInteractionResponse::Message(msg)
         .execute(http, interaction_id, interaction_token)
@@ -157,7 +157,7 @@ impl InteractionExt for ModalInteraction {
     }
 
     fn member(&self) -> Option<&Member> {
-        self.member.as_ref()
+        self.member.as_deref()
     }
 
     async fn create_response(
@@ -203,7 +203,7 @@ impl InteractionExt for ComponentInteraction {
     }
 
     fn member(&self) -> Option<&Member> {
-        self.member.as_ref()
+        self.member.as_deref()
     }
 
     async fn create_response(
@@ -293,7 +293,7 @@ impl<T: InteractionExt + Sync> Responder for T {
                 .flags(flags)
                 .allowed_mentions(CreateAllowedMentions::new().roles(roles));
             for (url, filename) in attachments.into_iter().flatten() {
-                msg = msg.add_file(CreateAttachment::url(http, url, filename).await?);
+                msg = msg.add_file(CreateAttachment::url(url, filename).await?);
             }
             CreateInteractionResponse::Message(msg)
         })

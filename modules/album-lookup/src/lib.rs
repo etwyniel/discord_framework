@@ -102,9 +102,7 @@ async fn lookup_album(
         // add track list and album cover if present
         contents.push_str(&info.format_tracks(None));
         if let Some(url) = info.cover {
-            attachment = CreateAttachment::url(&ctx.http, url, "cover.jpg")
-                .await
-                .ok();
+            attachment = CreateAttachment::url(url, "cover.jpg").await.ok();
         }
     }
     let mut resp = CreateInteractionResponseFollowup::new().content(contents);

@@ -702,7 +702,7 @@ pub async fn send_qotd(
             has_image = true;
             continue;
         }
-        attachments.push(CreateAttachment::url(http, &att.url, format!("att{i}.png")).await?);
+        attachments.push(CreateAttachment::url(&att.url, format!("att{i}.png")).await?);
     }
 
     // send response

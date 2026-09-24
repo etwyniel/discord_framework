@@ -428,7 +428,7 @@ impl Lp {
         let cover_attachment = if let Some(cover) = &info.cover
             && !info.has_rich_embed
         {
-            Some(CreateAttachment::url(http, cover, "cover.jpg").await?)
+            Some(CreateAttachment::url(cover, "cover.jpg").await?)
         } else {
             None
         };
